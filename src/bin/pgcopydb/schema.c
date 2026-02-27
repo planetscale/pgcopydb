@@ -3046,6 +3046,58 @@ struct FilteringQueries listSourceDependSQL[] = {
 		/* remove duplicates due to multiple refobjsubid / objsubid */
 		"GROUP BY n.nspname, c.relname, "
 		"         refclassid, refobjid, classid, objid, deptype, type, identity"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_EXCL_INDEX,
+		""
+	},
+
+	{
+		SOURCE_FILTER_TYPE_LIST_EXCL_INDEX,
+		""
+	},
+
+	{
+		SOURCE_FILTER_TYPE_EXCL_EXTENSION,
+
+		/*
+		 * Extension dependencies are simple - we don't need the complex
+		 * internal object remapping CTE. Just query pg_depend directly.
+		 */
+		"  SELECT '' as nspname, '' as relname, "
+		"         d.refclassid, d.refobjid, d.classid, d.objid, "
+		"         d.deptype, i.type, i.identity "
+		"    FROM pg_catalog.pg_depend d "
+		"         CROSS JOIN pg_identify_object(d.classid, d.objid, d.objsubid) i "
+		"   WHERE d.deptype = 'e' "
+		"     AND d.refclassid = 'pg_extension'::regclass "
+		"     AND NOT (d.refclassid = d.classid AND d.refobjid = d.objid) "
+
+		/* remove duplicates due to multiple refobjsubid / objsubid */
+		"GROUP BY d.refclassid, d.refobjid, d.classid, d.objid, "
+		"         d.deptype, i.type, i.identity"
+	},
+
+	{
+		SOURCE_FILTER_TYPE_LIST_EXCL_EXTENSION,
+
+		/*
+		 * Extension dependencies are simple - we don't need the complex
+		 * internal object remapping CTE. Just query pg_depend directly.
+		 */
+		"  SELECT '' as nspname, '' as relname, "
+		"         d.refclassid, d.refobjid, d.classid, d.objid, "
+		"         d.deptype, i.type, i.identity "
+		"    FROM pg_catalog.pg_depend d "
+		"         CROSS JOIN pg_identify_object(d.classid, d.objid, d.objsubid) i "
+		"   WHERE d.deptype = 'e' "
+		"     AND d.refclassid = 'pg_extension'::regclass "
+		"     AND NOT (d.refclassid = d.classid AND d.refobjid = d.objid) "
+
+		/* remove duplicates due to multiple refobjsubid / objsubid */
+		"GROUP BY d.refclassid, d.refobjid, d.classid, d.objid, "
+		"         d.deptype, i.type, i.identity"
 	}
 };
 
@@ -3063,6 +3115,12 @@ schema_list_pg_depend(PGSQL *pgsql,
 	SourceDependArrayContext context = { { 0 }, catalog, false };
 
 	log_trace("schema_list_pg_depend");
+
+	log_info("DEBUG: schema_list_pg_depend called with filter type: %s (%d)",
+			 filterTypeToString(filters->type), filters->type);
+	log_info("DEBUG: excludeExtensionList.count: %d, includeOnlyExtensionList.count: %d",
+			 filters->excludeExtensionList.count,
+			 filters->includeOnlyExtensionList.count);
 
 	switch (filters->type)
 	{
@@ -3093,6 +3151,18 @@ schema_list_pg_depend(PGSQL *pgsql,
 			return true;
 		}
 
+		/*
+		 * For extension filtering, we need pg_depend data to identify
+		 * extension-owned objects. Fetch extension dependencies without
+		 * using prepareFilters since we don't need temp tables.
+		 */
+		case SOURCE_FILTER_TYPE_EXCL_EXTENSION:
+		case SOURCE_FILTER_TYPE_LIST_EXCL_EXTENSION:
+		{
+			/* No prepareFilters needed - SQL doesn't use temp tables */
+			break;
+		}
+
 		default:
 		{
 			log_error("BUG: schema_list_pg_depend called with "
@@ -3102,9 +3172,55 @@ schema_list_pg_depend(PGSQL *pgsql,
 		}
 	}
 
+	/*
+	 * Extension filtering: fetch extension dependencies if exclude/include
+	 * extension lists are present. This must happen regardless of filter type
+	 * because extension filtering uses the generic EXCL type, not the
+	 * EXCL_EXTENSION type.
+	 */
+	log_info("DEBUG: About to check extension list counts for dependency fetching");
+	if (filters->excludeExtensionList.count > 0 ||
+		filters->includeOnlyExtensionList.count > 0)
+	{
+		char *extension_depend_sql =
+			"  SELECT '' as nspname, '' as relname, "
+			"         d.refclassid, d.refobjid, d.classid, d.objid, "
+			"         d.deptype, i.type, i.identity "
+			"    FROM pg_catalog.pg_depend d "
+			"         CROSS JOIN pg_identify_object(d.classid, d.objid, d.objsubid) i "
+			"   WHERE d.deptype = 'e' "
+			"     AND d.refclassid = 'pg_extension'::regclass "
+			"     AND NOT (d.refclassid = d.classid AND d.refobjid = d.objid) "
+
+			/* remove duplicates due to multiple refobjsubid / objsubid */
+			"GROUP BY d.refclassid, d.refobjid, d.classid, d.objid, "
+			"         d.deptype, i.type, i.identity";
+
+		log_info("Fetching extension dependencies for extension filtering");
+
+		if (!pgsql_execute_with_params(pgsql, extension_depend_sql, 0, NULL, NULL,
+									   &context, &getDependArray))
+		{
+			log_error("Failed to list extension dependencies");
+			return false;
+		}
+
+		if (!context.parsedOk)
+		{
+			log_error("Failed to parse extension dependencies");
+			return false;
+		}
+
+		log_info("Extension dependencies fetched successfully");
+		return true;
+	}
+
 	log_debug("listSourceDependSQL[%s]", filterTypeToString(filters->type));
 
 	char *sql = listSourceDependSQL[filters->type].sql;
+
+	log_info("Fetching dependencies from source database (filter type: %s)",
+			 filterTypeToString(filters->type));
 
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
 								   &context, &getDependArray))
@@ -3112,6 +3228,8 @@ schema_list_pg_depend(PGSQL *pgsql,
 		log_error("Failed to list table dependencies");
 		return false;
 	}
+
+	log_info("Dependency query executed successfully");
 
 	if (!context.parsedOk)
 	{
@@ -5585,6 +5703,8 @@ getDependArray(void *ctx, PGresult *result)
 	SourceDependArrayContext *context = (SourceDependArrayContext *) ctx;
 	int nTuples = PQntuples(result);
 
+	log_info("getDependArray: received %d dependency rows from source database", nTuples);
+
 	if (PQnfields(result) != 9)
 	{
 		log_error("Query returned %d columns, expected 9", PQnfields(result));
@@ -5604,15 +5724,29 @@ getDependArray(void *ctx, PGresult *result)
 			break;
 		}
 
-		if (context->catalog != NULL && context->catalog->db != NULL)
+		if (context->catalog == NULL || context->catalog->db == NULL)
 		{
-			if (!catalog_add_s_depend(context->catalog, depend))
-			{
-				/* errors have already been logged */
-				parsedOk = false;
-				break;
-			}
+			log_error("BUG: getDependArray called with NULL catalog database");
+			parsedOk = false;
+			break;
 		}
+
+		if (!catalog_add_s_depend(context->catalog, depend))
+		{
+			/* errors have already been logged */
+			parsedOk = false;
+			break;
+		}
+	}
+
+	if (parsedOk && nTuples > 0)
+	{
+		log_info("Successfully inserted %d dependency rows into s_depend table", nTuples);
+	}
+	else if (nTuples == 0)
+	{
+		log_warn(
+			"No extension dependencies found in source database - s_depend table will be empty");
 	}
 
 	context->parsedOk = parsedOk;

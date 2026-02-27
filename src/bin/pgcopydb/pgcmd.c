@@ -1554,7 +1554,8 @@ parse_archive_list_entry(ArchiveContentItem *item, const char *line)
 	 * 4840; 0 0 COMMENT - EXTENSION postgis
 	 */
 	if (item->desc == ARCHIVE_TAG_ACL ||
-		item->desc == ARCHIVE_TAG_COMMENT)
+		item->desc == ARCHIVE_TAG_COMMENT ||
+		item->desc == ARCHIVE_TAG_DEFAULT_ACL)
 	{
 		item->isCompositeTag = true;
 
@@ -1566,6 +1567,11 @@ parse_archive_list_entry(ArchiveContentItem *item, const char *line)
 		else if (item->desc == ARCHIVE_TAG_COMMENT)
 		{
 			item->tagKind = ARCHIVE_TAG_KIND_COMMENT;
+		}
+		else if (item->desc == ARCHIVE_TAG_DEFAULT_ACL)
+		{
+			/* Treat DEFAULT ACL as ACL for filtering purposes */
+			item->tagKind = ARCHIVE_TAG_KIND_ACL;
 		}
 
 		/* ignore errors, that's stuff we don't support yet (no need to) */
@@ -1752,29 +1758,102 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 	ArchiveToken token = { .ptr = ptr };
 
 	/*
-	 * At the moment we only support filtering ACLs and COMMENTS for SCHEMA and
-	 * EXTENSION objects, see --skip-extensions. So first, we skip the
-	 * namespace, which in our case would always be a dash.
+	 * ACL entries come in two formats:
+	 * 1. With "- " prefix: "- SCHEMA name owner" or "- EXTENSION name"
+	 * 2. Without prefix: "schema FUNCTION/TYPE/TABLE object owner"
+	 *
+	 * Check if this starts with "- " prefix or not.
 	 */
-	ArchiveTokenType list[] = {
-		ARCHIVE_TOKEN_DASH,
-		ARCHIVE_TOKEN_SPACE
-	};
+	ArchiveToken checkToken = { .ptr = ptr };
 
-	int count = sizeof(list) / sizeof(list[0]);
-
-	for (int i = 0; i < count; i++)
+	if (tokenize_archive_list_entry(&checkToken) &&
+		checkToken.type == ARCHIVE_TOKEN_DASH)
 	{
-		if (!tokenize_archive_list_entry(&token) || token.type != list[i])
+		/* Has "- " prefix - parse it normally */
+
+		if (!tokenize_archive_list_entry(&token) ||
+			token.type != ARCHIVE_TOKEN_DASH)
 		{
-			log_trace("Unsupported ACL or COMMENT (namespace is not -): \"%s\"",
-					  ptr);
+			return false;
+		}
+
+		if (!tokenize_archive_list_entry(&token) ||
+			token.type != ARCHIVE_TOKEN_SPACE)
+		{
 			return false;
 		}
 	}
+	else
+	{
+		/*
+		 * No "- " prefix - this is a FUNCTION/TYPE/TABLE ACL
+		 * Format: "schema DESC object owner"
+		 * Parse schema name first (token will be UNKNOWN since it's plain text)
+		 */
+		if (!tokenize_archive_list_entry(&token))
+		{
+			log_trace("Failed to tokenize schema name: \"%s\"", ptr);
+			return false;
+		}
+
+		if (token.type != ARCHIVE_TOKEN_UNKNOWN)
+		{
+			log_trace("Expected UNKNOWN token for schema name, got %d: \"%s\"",
+					  token.type, ptr);
+			return false;
+		}
+
+		/* Save pointer to schema name - we'll extract it after parsing DESC */
+		char *schemaStart = token.ptr;
+		char *schemaEnd = strchr(schemaStart, ' ');
+
+		if (schemaEnd == NULL)
+		{
+			log_trace("No space after schema name: \"%s\"", ptr);
+			return false;
+		}
+
+		/* Manually advance token.ptr past the schema name to the space */
+		token.ptr = schemaEnd;
+
+		/* Parse space after schema name */
+		if (!tokenize_archive_list_entry(&token) ||
+			token.type != ARCHIVE_TOKEN_SPACE)
+		{
+			log_trace("Expected space after schema name: \"%s\"", ptr);
+			return false;
+		}
+
+		/* Now parse the DESC tag (FUNCTION, TYPE, etc.) */
+		if (!tokenize_archive_list_entry(&token) ||
+			token.type != ARCHIVE_TOKEN_DESC)
+		{
+			log_trace("Expected DESC tag: \"%s\"", ptr);
+			return false;
+		}
+
+		/* Extract schema name and store in restoreListName for filtering */
+		int schemaLen = schemaEnd - schemaStart;
+		item->restoreListName = (char *) calloc(schemaLen + 1, sizeof(char));
+
+		if (item->restoreListName == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		sformat(item->restoreListName, schemaLen + 1, "%.*s",
+				schemaLen, schemaStart);
+
+		log_info("ACL: extracted schema '%s' from FUNCTION/TYPE/TABLE ACL",
+				 item->restoreListName);
+
+		item->tagType = ARCHIVE_TAG_TYPE_OTHER;
+		return true;
+	}
 
 	/*
-	 * Now parse the composite item description tag.
+	 * For entries with "- " prefix, now parse the DESC tag.
 	 */
 	if (!tokenize_archive_list_entry(&token) ||
 		token.type != ARCHIVE_TOKEN_DESC)
@@ -1863,8 +1942,90 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 		sformat(item->restoreListName, bytes, "%s", extname);
 		item->tagType = ARCHIVE_TAG_TYPE_EXTENSION;
 	}
+	else if (token.desc == ARCHIVE_TAG_DEFAULT_ACL)
+	{
+		/*
+		 * Handle DEFAULT ACL entries
+		 * Format: "schema DEFAULT PRIVILEGES FOR objtype"
+		 * Example: "repack DEFAULT PRIVILEGES FOR SEQUENCES"
+		 * Extract schema name (first word before space)
+		 *
+		 * token.ptr points to space before data, so token.ptr+1 is first char
+		 */
+		char *schemaStart = token.ptr + 1;  /* skip space after tag */
+		char *schemaEnd = strchr(schemaStart, ' ');
+
+		if (schemaEnd == NULL)
+		{
+			log_error("Failed to parse DEFAULT ACL entry: %s", schemaStart);
+			item->tagType = ARCHIVE_TAG_TYPE_OTHER;
+			return false;
+		}
+
+		int schemaLen = schemaEnd - schemaStart;
+		int bytes = schemaLen + 1;
+
+		item->restoreListName = (char *) calloc(bytes, sizeof(char));
+
+		if (item->restoreListName == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		sformat(item->restoreListName, schemaLen + 1, "%.*s",
+				schemaLen, schemaStart);
+
+		log_info("DEFAULT ACL: extracted schema '%s' from '%s'",
+				 item->restoreListName,
+				 schemaStart);
+
+		item->tagType = ARCHIVE_TAG_TYPE_OTHER;
+	}
 	else
 	{
+		/*
+		 * For unsupported ACL types (FUNCTION, TYPE, etc.), try to extract
+		 * the schema name for extension filtering purposes.
+		 *
+		 * Format after DESC token: "<schema> <type> <object> <owner>"
+		 * Example: "rds_tools FUNCTION blue_green_get_status(...) owner"
+		 * token.ptr points to space before data, so token.ptr+1 is first char
+		 */
+		char *schemaStart = token.ptr + 1;  /* skip space after tag */
+		char *schemaEnd = strchr(schemaStart, ' ');
+
+		log_info("ACL parsing: desc='%s', token.ptr+1='%s'",
+				 item->description,
+				 schemaStart ? schemaStart : "(null)");
+
+		if (schemaEnd != NULL && schemaStart != NULL)
+		{
+			int schemaLen = schemaEnd - schemaStart;
+			int bytes = schemaLen + 1;
+
+			item->restoreListName = (char *) calloc(bytes, sizeof(char));
+
+			if (item->restoreListName != NULL)
+			{
+				sformat(item->restoreListName, schemaLen + 1, "%.*s",
+						schemaLen, schemaStart);
+
+				log_info("ACL: extracted schema '%s' for filtering",
+						 item->restoreListName);
+			}
+			else
+			{
+				log_error("ACL: failed to allocate memory for schema name");
+			}
+		}
+		else
+		{
+			log_warn("ACL: could not extract schema from '%s' (schemaEnd=%s)",
+					 item->description,
+					 schemaEnd ? "found" : "NULL");
+		}
+
 		log_debug("Failed to parse %s \"%s\": not supported yet",
 				  item->description,
 				  ptr);

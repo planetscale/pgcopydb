@@ -130,6 +130,50 @@ over.
 
 NOTE: Materialized views are also considered as tables during the filtering.
 
+exclude-extension
+^^^^^^^^^^^^^^^^^
+
+This section allows excluding specific PostgreSQL extensions from being
+migrated. When an extension is excluded, **all database objects created by
+that extension** are automatically excluded as well.
+
+This includes:
+
+- Extension-owned tables, views, and materialized views
+- Extension-created functions and procedures
+- Extension-defined types, operators, and casts
+- Extension-owned schemas
+- Any other objects with a dependency on the extension
+
+Example:
+
+.. code-block:: ini
+
+  [exclude-extension]
+  pgvector
+  pg_cron
+  timescaledb
+
+This section is not allowed when the section ``include-only-extension`` is
+used.
+
+include-only-extension
+^^^^^^^^^^^^^^^^^^^^^^
+
+This section allows specifying which extensions should be migrated. Only the
+listed extensions and their dependent objects will be copied. This is mutually
+exclusive with ``exclude-extension``.
+
+Example:
+
+.. code-block:: ini
+
+  [include-only-extension]
+  postgis
+  uuid-ossp
+
+This section is not allowed when the section ``exclude-extension`` is used.
+
 Reviewing and Debugging the filters
 -----------------------------------
 

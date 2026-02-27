@@ -225,6 +225,23 @@ copydb_copy_extensions_hook(void *ctx, SourceExtension *ext)
 	PGSQL *src = context->src;
 	PGSQL *dst = context->dst;
 
+	/*
+	 * When NOT explicitly creating extensions (i.e. during clone/restore),
+	 * check if the extension is filtered out. When createExtensions is true,
+	 * we're in "copy extensions" mode which explicitly wants to create
+	 * extensions regardless of filters.
+	 */
+	if (!context->createExtensions)
+	{
+		CatalogFilter filter = { 0 };
+
+		if (catalog_lookup_filter_by_oid(context->filtersDB, &filter, ext->oid))
+		{
+			/* Extension is filtered, skip it */
+			return true;
+		}
+	}
+
 	if (context->createExtensions)
 	{
 		PQExpBuffer sql = createPQExpBuffer();
