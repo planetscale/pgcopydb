@@ -1,0 +1,13 @@
+-[ RECORD 1 ]-----------
+nspname | foo
+relname | tbl1
+-[ RECORD 2 ]-----------
+nspname | foo
+relname | tbl_status
+-[ RECORD 3 ]-----------
+nspname | seq
+relname | default_table
+-[ RECORD 4 ]-----------
+nspname | seq
+relname | identity_table
+

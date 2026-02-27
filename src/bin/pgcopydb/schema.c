@@ -30,6 +30,10 @@
 
 static bool prepareFilters(PGSQL *pgsql, SourceFilters *filters);
 
+static bool buildFilterCTEPreamble(SourceFilters *filters);
+
+static char * prepareFilteredSQL(SourceFilters *filters, const char *sql);
+
 static bool prepareFilterCopyIncludeOnlySchema(PGSQL *pgsql,
 											   SourceFilters *filters);
 
@@ -722,7 +726,7 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 
 		/* include-only-table */
-		"         join pg_temp.filter_include_only_table inc "
+		"         join filter_include_only_table inc "
 		"           on n.nspname = inc.nspname "
 		"          and c.relname = inc.relname "
 
@@ -749,16 +753,16 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 
 		/* exclude-schema */
-		"         left join pg_temp.filter_exclude_schema fn "
+		"         left join filter_exclude_schema fn "
 		"                on n.nspname = fn.nspname "
 
 		/* exclude-table */
-		"         left join pg_temp.filter_exclude_table ft "
+		"         left join filter_exclude_table ft "
 		"                on n.nspname = ft.nspname "
 		"               and c.relname = ft.relname "
 
 		/* exclude-table-data */
-		"         left join pg_temp.filter_exclude_table_data ftd "
+		"         left join filter_exclude_table_data ftd "
 		"                on n.nspname = ftd.nspname "
 		"               and c.relname = ftd.relname "
 
@@ -790,7 +794,7 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 
 		/* include-only-table */
-		"    left join pg_temp.filter_include_only_table inc "
+		"    left join filter_include_only_table inc "
 		"           on n.nspname = inc.nspname "
 		"          and c.relname = inc.relname "
 
@@ -820,11 +824,11 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 
 		/* exclude-schema */
-		"         left join pg_temp.filter_exclude_schema fn "
+		"         left join filter_exclude_schema fn "
 		"                on n.nspname = fn.nspname "
 
 		/* exclude-table */
-		"         left join pg_temp.filter_exclude_table ft "
+		"         left join filter_exclude_table ft "
 		"                on n.nspname = ft.nspname "
 		"               and c.relname = ft.relname "
 
@@ -901,9 +905,25 @@ schema_prepare_pgcopydb_table_size(PGSQL *pgsql,
 
 	SourceTableSizeArrayContext context = { { 0 }, catalog, false };
 
-	if (!pgsql_execute_with_params(pgsql, listSourceTableSizeSQL[filterType].sql,
-								   0, NULL, NULL,
-								   &context, &getTableSizeArray))
+	char *sql = prepareFilteredSQL(filters,
+								   listSourceTableSizeSQL[filterType].sql);
+
+	if (sql == NULL)
+	{
+		log_error("Failed to prepare filtered SQL for table size query");
+		return false;
+	}
+
+	bool ok = pgsql_execute_with_params(pgsql, sql,
+										0, NULL, NULL,
+										&context, &getTableSizeArray);
+
+	if (filters->ctePreamble != NULL && sql != NULL)
+	{
+		free(sql);
+	}
+
+	if (!ok)
 	{
 		log_error("Failed to compute table size, see above for details");
 		return false;
@@ -1013,7 +1033,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"         c.relpages * current_setting('block_size')::bigint as bytesestimate, "
 		"         pg_size_pretty(c.relpages * current_setting('block_size')::bigint), "
 		"         exists(select 1 "
-		"                  from pg_temp.filter_exclude_table_data ftd "
+		"                  from filter_exclude_table_data ftd "
 		"                 where n.nspname = ftd.nspname "
 		"                   and c.relname = ftd.relname) as excludedata,"
 		"         format('%s %s', "
@@ -1053,7 +1073,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"              ) as attrs on true"
 
 		/* include-only-table */
-		"         join pg_temp.filter_include_only_table inc "
+		"         join filter_include_only_table inc "
 		"           on n.nspname = inc.nspname "
 		"          and c.relname = inc.relname "
 
@@ -1142,16 +1162,16 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"              ) as attrs on true"
 
 		/* exclude-schema */
-		"         left join pg_temp.filter_exclude_schema fn "
+		"         left join filter_exclude_schema fn "
 		"                on n.nspname = fn.nspname "
 
 		/* exclude-table */
-		"         left join pg_temp.filter_exclude_table ft "
+		"         left join filter_exclude_table ft "
 		"                on n.nspname = ft.nspname "
 		"               and c.relname = ft.relname "
 
 		/* exclude-table-data */
-		"         left join pg_temp.filter_exclude_table_data ftd "
+		"         left join filter_exclude_table_data ftd "
 		"                on n.nspname = ftd.nspname "
 		"               and c.relname = ftd.relname "
 
@@ -1244,7 +1264,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"              ) as attrs on true"
 
 		/* include-only-table */
-		"    left join pg_temp.filter_include_only_table inc "
+		"    left join filter_include_only_table inc "
 		"           on n.nspname = inc.nspname "
 		"          and c.relname = inc.relname "
 
@@ -1336,11 +1356,11 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"              ) as attrs on true"
 
 		/* exclude-schema */
-		"         left join pg_temp.filter_exclude_schema fn "
+		"         left join filter_exclude_schema fn "
 		"                on n.nspname = fn.nspname "
 
 		/* exclude-table */
-		"         left join pg_temp.filter_exclude_table ft "
+		"         left join filter_exclude_table ft "
 		"                on n.nspname = ft.nspname "
 		"               and c.relname = ft.relname "
 
@@ -1445,10 +1465,24 @@ schema_list_ordinary_tables(PGSQL *pgsql,
 
 	log_debug("listSourceTablesSQL[%s]", filterTypeToString(filterType));
 
-	char *sql = listSourceTablesSQL[filterType].sql;
+	char *sql = prepareFilteredSQL(filters,
+								   listSourceTablesSQL[filterType].sql);
 
-	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
-								   &context, &getTableArray))
+	if (sql == NULL)
+	{
+		log_error("Failed to prepare filtered SQL for tables query");
+		return false;
+	}
+
+	bool ok = pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+										&context, &getTableArray);
+
+	if (filters->ctePreamble != NULL && sql != NULL)
+	{
+		free(sql);
+	}
+
+	if (!ok)
 	{
 		log_error("Failed to list tables");
 		return false;
@@ -1538,7 +1572,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         join pg_roles auth ON auth.oid = c.relowner"
 
 		/* include-only-table */
-		"         join pg_temp.filter_include_only_table inc "
+		"         join filter_include_only_table inc "
 		"           on n.nspname = inc.nspname "
 		"          and c.relname = inc.relname "
 
@@ -1589,16 +1623,16 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         join pg_roles auth ON auth.oid = c.relowner"
 
 		/* exclude-schema */
-		"         left join pg_temp.filter_exclude_schema fn "
+		"         left join filter_exclude_schema fn "
 		"                on n.nspname = fn.nspname "
 
 		/* exclude-table */
-		"         left join pg_temp.filter_exclude_table ft "
+		"         left join filter_exclude_table ft "
 		"                on n.nspname = ft.nspname "
 		"               and c.relname = ft.relname "
 
 		/* exclude-table-data */
-		"         left join pg_temp.filter_exclude_table_data ftd "
+		"         left join filter_exclude_table_data ftd "
 		"                on n.nspname = ftd.nspname "
 		"               and c.relname = ftd.relname "
 
@@ -1653,7 +1687,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         join pg_roles auth ON auth.oid = c.relowner"
 
 		/* include-only-table */
-		"    left join pg_temp.filter_include_only_table inc "
+		"    left join filter_include_only_table inc "
 		"           on n.nspname = inc.nspname "
 		"          and c.relname = inc.relname "
 
@@ -1707,11 +1741,11 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         join pg_roles auth ON auth.oid = c.relowner"
 
 		/* exclude-schema */
-		"         left join pg_temp.filter_exclude_schema fn "
+		"         left join filter_exclude_schema fn "
 		"                on n.nspname = fn.nspname "
 
 		/* exclude-table */
-		"         left join pg_temp.filter_exclude_table ft "
+		"         left join filter_exclude_table ft "
 		"                on n.nspname = ft.nspname "
 		"               and c.relname = ft.relname "
 
@@ -1846,11 +1880,11 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"       left join pg_namespace rn2 on rn2.oid = r2.relnamespace "
 
 		/* include-only-table */
-		"       left join pg_temp.filter_include_only_table inc1 "
+		"       left join filter_include_only_table inc1 "
 		"         on rn1.nspname = inc1.nspname "
 		"        and r1.relname = inc1.relname "
 
-		"       left join pg_temp.filter_include_only_table inc2 "
+		"       left join filter_include_only_table inc2 "
 		"         on rn2.nspname = inc2.nspname "
 		"        and r2.relname = inc2.relname "
 
@@ -1924,30 +1958,30 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"       left join pg_namespace rn2 on rn2.oid = r2.relnamespace "
 
 		/* exclude-schema */
-		"      left join pg_temp.filter_exclude_schema fn1 "
+		"      left join filter_exclude_schema fn1 "
 		"             on rn1.nspname = fn1.nspname "
 
-		"      left join pg_temp.filter_exclude_schema fn2 "
+		"      left join filter_exclude_schema fn2 "
 		"             on rn2.nspname = fn2.nspname "
 
-		"      left join pg_temp.filter_exclude_schema fn3 "
+		"      left join filter_exclude_schema fn3 "
 		"			 on s.nspname = fn3.nspname "
 
 		/* exclude-table */
-		"      left join pg_temp.filter_exclude_table ft1 "
+		"      left join filter_exclude_table ft1 "
 		"             on rn1.nspname = ft1.nspname "
 		"            and r1.relname = ft1.relname "
 
-		"      left join pg_temp.filter_exclude_table ft2 "
+		"      left join filter_exclude_table ft2 "
 		"             on rn2.nspname = ft2.nspname "
 		"            and r2.relname = ft2.relname "
 
 		/* exclude-table-data */
-		"      left join pg_temp.filter_exclude_table_data ftd1 "
+		"      left join filter_exclude_table_data ftd1 "
 		"             on rn1.nspname = ftd1.nspname "
 		"            and r1.relname = ftd1.relname "
 
-		"      left join pg_temp.filter_exclude_table_data ftd2 "
+		"      left join filter_exclude_table_data ftd2 "
 		"             on rn2.nspname = ftd2.nspname "
 		"            and r2.relname = ftd2.relname "
 
@@ -2037,11 +2071,11 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"       left join pg_namespace rn2 on rn2.oid = r2.relnamespace "
 
 		/* include-only-table */
-		"       left join pg_temp.filter_include_only_table inc1 "
+		"       left join filter_include_only_table inc1 "
 		"              on rn1.nspname = inc1.nspname "
 		"             and r1.relname = inc1.relname "
 
-		"       left join pg_temp.filter_include_only_table inc2 "
+		"       left join filter_include_only_table inc2 "
 		"              on rn2.nspname = inc2.nspname "
 		"             and r2.relname = inc2.relname "
 
@@ -2115,11 +2149,11 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"       left join pg_namespace rn2 on rn2.oid = r2.relnamespace "
 
 		/* exclude-schema */
-		"      left join pg_temp.filter_exclude_schema fn "
+		"      left join filter_exclude_schema fn "
 		"             on rn1.nspname = fn.nspname "
 
 		/* exclude-table */
-		"      left join pg_temp.filter_exclude_table ft "
+		"      left join filter_exclude_table ft "
 		"             on rn1.nspname = ft.nspname "
 		"            and r1.relname = ft.relname "
 
@@ -2202,6 +2236,7 @@ schema_list_sequences(PGSQL *pgsql,
 	 * SOURCE_FILTER_TYPE_EXCL list.
 	 */
 	PQExpBuffer buffer = NULL;
+	char *filteredSQL = NULL;
 
 	if (filters->type == SOURCE_FILTER_TYPE_LIST_EXCL)
 	{
@@ -2209,6 +2244,16 @@ schema_list_sequences(PGSQL *pgsql,
 
 		char *exclude = sql;
 		char *keep = listSourceSequencesSQL[SOURCE_FILTER_TYPE_EXCL].sql;
+
+		/*
+		 * For read-only sources, prepend the CTE preamble at the top level
+		 * and wrap both subqueries. The CTE definitions are visible to both
+		 * subqueries since they're at the outermost WITH clause level.
+		 */
+		if (filters->ctePreamble != NULL)
+		{
+			appendPQExpBuffer(buffer, "WITH %s ", filters->ctePreamble);
+		}
 
 		char *sqlTmpl =
 			"select seqoid, "
@@ -2238,12 +2283,30 @@ schema_list_sequences(PGSQL *pgsql,
 
 		sql = buffer->data;
 	}
+	else
+	{
+		filteredSQL = prepareFilteredSQL(filters, sql);
+
+		if (filteredSQL == NULL)
+		{
+			log_error("Failed to prepare filtered SQL for sequences query");
+			return false;
+		}
+
+		sql = filteredSQL;
+	}
 
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
 								   &context, &getSequenceArray))
 	{
 		log_error("Failed to list sequences");
 		(void) destroyPQExpBuffer(buffer);
+
+		if (filters->ctePreamble != NULL && filteredSQL != NULL)
+		{
+			free(filteredSQL);
+		}
+
 		return false;
 	}
 
@@ -2251,10 +2314,21 @@ schema_list_sequences(PGSQL *pgsql,
 	{
 		log_error("Failed to list sequences");
 		(void) destroyPQExpBuffer(buffer);
+
+		if (filters->ctePreamble != NULL && filteredSQL != NULL)
+		{
+			free(filteredSQL);
+		}
+
 		return false;
 	}
 
 	(void) destroyPQExpBuffer(buffer);
+
+	if (filters->ctePreamble != NULL && filteredSQL != NULL)
+	{
+		free(filteredSQL);
+	}
 
 	return true;
 }
@@ -2458,12 +2532,12 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          left join pg_constraint c ON c.oid = d.refobjid"
 
 		/* include-only-table */
-		"         join pg_temp.filter_include_only_table inc "
+		"         join filter_include_only_table inc "
 		"           on rn.nspname = inc.nspname "
 		"          and r.relname = inc.relname "
 
 		/* exclude-index */
-		"         left join pg_temp.filter_exclude_index fei "
+		"         left join filter_exclude_index fei "
 		"                on n.nspname = fei.nspname "
 		"               and i.relname = fei.relname "
 
@@ -2528,21 +2602,21 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          left join pg_constraint c ON c.oid = d.refobjid"
 
 		/* exclude-schema */
-		"         left join pg_temp.filter_exclude_schema fn "
+		"         left join filter_exclude_schema fn "
 		"                on rn.nspname = fn.nspname "
 
 		/* exclude-table */
-		"         left join pg_temp.filter_exclude_table ft "
+		"         left join filter_exclude_table ft "
 		"                on rn.nspname = ft.nspname "
 		"               and r.relname = ft.relname "
 
 		/* exclude-table-data */
-		"         left join pg_temp.filter_exclude_table_data ftd "
+		"         left join filter_exclude_table_data ftd "
 		"                on rn.nspname = ftd.nspname "
 		"               and r.relname = ftd.relname "
 
 		/* exclude-index */
-		"         left join pg_temp.filter_exclude_index fei "
+		"         left join filter_exclude_index fei "
 		"                on n.nspname = fei.nspname "
 		"               and i.relname = fei.relname "
 
@@ -2610,12 +2684,12 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          left join pg_constraint c ON c.oid = d.refobjid"
 
 		/* include-only-table */
-		"    left join pg_temp.filter_include_only_table inc "
+		"    left join filter_include_only_table inc "
 		"           on rn.nspname = inc.nspname "
 		"          and r.relname = inc.relname "
 
 		/* exclude-index */
-		"    left join pg_temp.filter_exclude_index fei "
+		"    left join filter_exclude_index fei "
 		"           on n.nspname = fei.nspname "
 		"          and i.relname = fei.relname "
 
@@ -2682,16 +2756,16 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"          left join pg_constraint c ON c.oid = d.refobjid"
 
 		/* exclude-schema */
-		"         left join pg_temp.filter_exclude_schema fn "
+		"         left join filter_exclude_schema fn "
 		"                on rn.nspname = fn.nspname "
 
 		/* exclude-table */
-		"         left join pg_temp.filter_exclude_table ft "
+		"         left join filter_exclude_table ft "
 		"                on rn.nspname = ft.nspname "
 		"               and r.relname = ft.relname "
 
 		/* exclude-index */
-		"         left join pg_temp.filter_exclude_index fei "
+		"         left join filter_exclude_index fei "
 		"                on n.nspname = fei.nspname "
 		"               and i.relname = fei.relname "
 
@@ -2872,10 +2946,24 @@ schema_list_all_indexes(PGSQL *pgsql,
 
 	log_debug("listSourceIndexesSQL[%s]", filterTypeToString(filters->type));
 
-	char *sql = listSourceIndexesSQL[filters->type].sql;
+	char *sql = prepareFilteredSQL(filters,
+								   listSourceIndexesSQL[filters->type].sql);
 
-	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
-								   &context, &getIndexArray))
+	if (sql == NULL)
+	{
+		log_error("Failed to prepare filtered SQL for indexes query");
+		return false;
+	}
+
+	bool ok = pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+										&context, &getIndexArray);
+
+	if (filters->ctePreamble != NULL && sql != NULL)
+	{
+		free(sql);
+	}
+
+	if (!ok)
 	{
 		log_error("Failed to list all indexes");
 		return false;
@@ -2915,7 +3003,7 @@ struct FilteringQueries listSourceDependSQL[] = {
 
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 
-		"         join pg_temp.filter_include_only_table inc "
+		"         join filter_include_only_table inc "
 		"           on n.nspname = inc.nspname "
 		"          and c.relname = inc.relname "
 
@@ -2948,11 +3036,11 @@ struct FilteringQueries listSourceDependSQL[] = {
 		"           on c.relnamespace = cn.oid "
 
 		/* exclude-schema */
-		"         left join pg_temp.filter_exclude_schema fn "
+		"         left join filter_exclude_schema fn "
 		"                on cn.nspname = fn.nspname "
 
 		/* exclude-table */
-		"         left join pg_temp.filter_exclude_table ft "
+		"         left join filter_exclude_table ft "
 		"                on cn.nspname = ft.nspname "
 		"               and c.relname = ft.relname "
 
@@ -2988,7 +3076,7 @@ struct FilteringQueries listSourceDependSQL[] = {
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 
 		/* include-only-table */
-		"    left join pg_temp.filter_include_only_table inc "
+		"    left join filter_include_only_table inc "
 		"           on n.nspname = inc.nspname "
 		"          and c.relname = inc.relname "
 
@@ -3024,11 +3112,11 @@ struct FilteringQueries listSourceDependSQL[] = {
 		"           on c.relnamespace = n.oid "
 
 		/* exclude-schema */
-		"         left join pg_temp.filter_exclude_schema fn "
+		"         left join filter_exclude_schema fn "
 		"                on n.nspname = fn.nspname "
 
 		/* exclude-table */
-		"         left join pg_temp.filter_exclude_table ft "
+		"         left join filter_exclude_table ft "
 		"                on n.nspname = ft.nspname "
 		"               and c.relname = ft.relname "
 
@@ -3217,13 +3305,27 @@ schema_list_pg_depend(PGSQL *pgsql,
 
 	log_debug("listSourceDependSQL[%s]", filterTypeToString(filters->type));
 
-	char *sql = listSourceDependSQL[filters->type].sql;
+	char *sql = prepareFilteredSQL(filters,
+								   listSourceDependSQL[filters->type].sql);
+
+	if (sql == NULL)
+	{
+		log_error("Failed to prepare filtered SQL for dependencies query");
+		return false;
+	}
 
 	log_info("Fetching dependencies from source database (filter type: %s)",
 			 filterTypeToString(filters->type));
 
-	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
-								   &context, &getDependArray))
+	bool ok = pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+										&context, &getDependArray);
+
+	if (filters->ctePreamble != NULL && sql != NULL)
+	{
+		free(sql);
+	}
+
+	if (!ok)
 	{
 		log_error("Failed to list table dependencies");
 		return false;
@@ -3531,6 +3633,327 @@ schema_fetch_table_checksum(PGSQL *pgsql, TableChecksum *sum, bool *done)
 
 
 /*
+ * appendSQLEscapedName appends a name to the buffer with single-quote doubling
+ * for use in SQL string literals (e.g. VALUES ('schema''s_name'::name)).
+ */
+static void
+appendSQLEscapedName(PQExpBuffer buf, const char *name)
+{
+	for (const char *p = name; *p != '\0'; p++)
+	{
+		if (*p == '\'')
+		{
+			appendPQExpBuffer(buf, "''");
+		}
+		else
+		{
+			appendPQExpBuffer(buf, "%c", *p);
+		}
+	}
+}
+
+
+/*
+ * buildFilterCTEPreamble generates a comma-separated list of CTE definitions
+ * from the in-memory filter data. This is used on read-only sources (replicas)
+ * where we cannot create temp tables.
+ *
+ * Each filter temp table is replaced with a CTE definition:
+ *  - empty lists: filter_name(cols) AS (SELECT NULL::name WHERE false)
+ *  - schema lists: filter_...(nspname) AS (VALUES ('s1'::name), ...)
+ *  - table lists: filter_...(nspname, relname) AS (VALUES (...), ...)
+ *  - include-only-schema: generates an exclude_schema CTE with NOT IN logic
+ */
+static bool
+buildFilterCTEPreamble(SourceFilters *filters)
+{
+	PQExpBuffer buf = createPQExpBuffer();
+
+	if (buf == NULL)
+	{
+		log_error("Failed to allocate CTE preamble buffer");
+		return false;
+	}
+
+	/*
+	 * filter_exclude_schema: populated from excludeSchemaList, or from
+	 * includeOnlySchemaList via NOT IN inversion.
+	 */
+	if (filters->includeOnlySchemaList.count > 0)
+	{
+		appendPQExpBuffer(buf,
+						  "filter_exclude_schema(nspname) AS ("
+						  "SELECT n.nspname FROM pg_namespace n "
+						  "WHERE n.nspname NOT IN (");
+
+		for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
+		{
+			if (i > 0)
+			{
+				appendPQExpBuffer(buf, ", ");
+			}
+
+			appendPQExpBuffer(buf, "'");
+			appendSQLEscapedName(buf,
+								 filters->includeOnlySchemaList.array[i].nspname);
+			appendPQExpBuffer(buf, "'");
+		}
+
+		appendPQExpBuffer(buf,
+						  ") AND n.nspname !~ '^pg_' "
+						  "AND n.nspname <> 'information_schema')");
+	}
+	else if (filters->excludeSchemaList.count > 0)
+	{
+		appendPQExpBuffer(buf,
+						  "filter_exclude_schema(nspname) AS (VALUES ");
+
+		for (int i = 0; i < filters->excludeSchemaList.count; i++)
+		{
+			if (i > 0)
+			{
+				appendPQExpBuffer(buf, ", ");
+			}
+
+			appendPQExpBuffer(buf, "('");
+			appendSQLEscapedName(buf,
+								 filters->excludeSchemaList.array[i].nspname);
+			appendPQExpBuffer(buf, "'::name)");
+		}
+
+		appendPQExpBuffer(buf, ")");
+	}
+	else
+	{
+		appendPQExpBuffer(buf,
+						  "filter_exclude_schema(nspname) AS "
+						  "(SELECT NULL::name WHERE false)");
+	}
+
+	/* filter_include_only_table */
+	appendPQExpBuffer(buf, ", ");
+
+	if (filters->includeOnlyTableList.count > 0)
+	{
+		appendPQExpBuffer(buf,
+						  "filter_include_only_table(nspname, relname) "
+						  "AS (VALUES ");
+
+		for (int i = 0; i < filters->includeOnlyTableList.count; i++)
+		{
+			if (i > 0)
+			{
+				appendPQExpBuffer(buf, ", ");
+			}
+
+			appendPQExpBuffer(buf, "('");
+			appendSQLEscapedName(buf,
+								 filters->includeOnlyTableList.array[i].nspname);
+			appendPQExpBuffer(buf, "'::name, '");
+			appendSQLEscapedName(buf,
+								 filters->includeOnlyTableList.array[i].relname);
+			appendPQExpBuffer(buf, "'::name)");
+		}
+
+		appendPQExpBuffer(buf, ")");
+	}
+	else
+	{
+		appendPQExpBuffer(buf,
+						  "filter_include_only_table(nspname, relname) AS "
+						  "(SELECT NULL::name, NULL::name WHERE false)");
+	}
+
+	/* filter_exclude_table */
+	appendPQExpBuffer(buf, ", ");
+
+	if (filters->excludeTableList.count > 0)
+	{
+		appendPQExpBuffer(buf,
+						  "filter_exclude_table(nspname, relname) "
+						  "AS (VALUES ");
+
+		for (int i = 0; i < filters->excludeTableList.count; i++)
+		{
+			if (i > 0)
+			{
+				appendPQExpBuffer(buf, ", ");
+			}
+
+			appendPQExpBuffer(buf, "('");
+			appendSQLEscapedName(buf,
+								 filters->excludeTableList.array[i].nspname);
+			appendPQExpBuffer(buf, "'::name, '");
+			appendSQLEscapedName(buf,
+								 filters->excludeTableList.array[i].relname);
+			appendPQExpBuffer(buf, "'::name)");
+		}
+
+		appendPQExpBuffer(buf, ")");
+	}
+	else
+	{
+		appendPQExpBuffer(buf,
+						  "filter_exclude_table(nspname, relname) AS "
+						  "(SELECT NULL::name, NULL::name WHERE false)");
+	}
+
+	/* filter_exclude_table_data */
+	appendPQExpBuffer(buf, ", ");
+
+	if (filters->excludeTableDataList.count > 0)
+	{
+		appendPQExpBuffer(buf,
+						  "filter_exclude_table_data(nspname, relname) "
+						  "AS (VALUES ");
+
+		for (int i = 0; i < filters->excludeTableDataList.count; i++)
+		{
+			if (i > 0)
+			{
+				appendPQExpBuffer(buf, ", ");
+			}
+
+			appendPQExpBuffer(buf, "('");
+			appendSQLEscapedName(buf,
+								 filters->excludeTableDataList.array[i].nspname);
+			appendPQExpBuffer(buf, "'::name, '");
+			appendSQLEscapedName(buf,
+								 filters->excludeTableDataList.array[i].relname);
+			appendPQExpBuffer(buf, "'::name)");
+		}
+
+		appendPQExpBuffer(buf, ")");
+	}
+	else
+	{
+		appendPQExpBuffer(buf,
+						  "filter_exclude_table_data(nspname, relname) AS "
+						  "(SELECT NULL::name, NULL::name WHERE false)");
+	}
+
+	/* filter_exclude_index */
+	appendPQExpBuffer(buf, ", ");
+
+	if (filters->excludeIndexList.count > 0)
+	{
+		appendPQExpBuffer(buf,
+						  "filter_exclude_index(nspname, relname) "
+						  "AS (VALUES ");
+
+		for (int i = 0; i < filters->excludeIndexList.count; i++)
+		{
+			if (i > 0)
+			{
+				appendPQExpBuffer(buf, ", ");
+			}
+
+			appendPQExpBuffer(buf, "('");
+			appendSQLEscapedName(buf,
+								 filters->excludeIndexList.array[i].nspname);
+			appendPQExpBuffer(buf, "'::name, '");
+			appendSQLEscapedName(buf,
+								 filters->excludeIndexList.array[i].relname);
+			appendPQExpBuffer(buf, "'::name)");
+		}
+
+		appendPQExpBuffer(buf, ")");
+	}
+	else
+	{
+		appendPQExpBuffer(buf,
+						  "filter_exclude_index(nspname, relname) AS "
+						  "(SELECT NULL::name, NULL::name WHERE false)");
+	}
+
+	if (PQExpBufferBroken(buf))
+	{
+		log_error("Failed to build CTE preamble: out of memory");
+		(void) destroyPQExpBuffer(buf);
+		return false;
+	}
+
+	filters->ctePreamble = strdup(buf->data);
+
+	(void) destroyPQExpBuffer(buf);
+
+	if (filters->ctePreamble == NULL)
+	{
+		log_error("Failed to copy CTE preamble: out of memory");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * prepareFilteredSQL returns the SQL string with CTE preamble prepended when
+ * the source is read-only and ctePreamble is set. For writable sources (no
+ * ctePreamble), returns the original SQL unchanged.
+ *
+ * For queries that start with "WITH RECURSIVE" (like the pg_depend queries),
+ * the CTEs are injected after the "WITH RECURSIVE" keyword. For queries that
+ * start with "with " (like sequence queries), CTEs are injected after "with".
+ *
+ * The caller must free the returned string when ctePreamble is set.
+ */
+static char *
+prepareFilteredSQL(SourceFilters *filters, const char *sql)
+{
+	if (filters->ctePreamble == NULL)
+	{
+		return (char *) sql;
+	}
+
+	PQExpBuffer buf = createPQExpBuffer();
+
+	if (buf == NULL)
+	{
+		log_error("Failed to allocate filtered SQL buffer");
+		return NULL;
+	}
+
+	/*
+	 * Check if the SQL already starts with WITH (case-insensitive) so we
+	 * can inject our CTE definitions after the WITH keyword rather than
+	 * prepending a new WITH clause.
+	 *
+	 * - "WITH RECURSIVE " - pg_depend queries via PG_DEPEND_SQL
+	 * - "with " - sequence queries that define their own CTE
+	 */
+	if (strncmp(sql, "WITH RECURSIVE ", 15) == 0)
+	{
+		appendPQExpBuffer(buf, "WITH RECURSIVE %s, ", filters->ctePreamble);
+		appendPQExpBuffer(buf, "%s", sql + 15);
+	}
+	else if (strncmp(sql, "with ", 5) == 0)
+	{
+		appendPQExpBuffer(buf, "WITH %s, ", filters->ctePreamble);
+		appendPQExpBuffer(buf, "%s", sql + 5);
+	}
+	else
+	{
+		appendPQExpBuffer(buf, "WITH %s ", filters->ctePreamble);
+		appendPQExpBuffer(buf, "%s", sql);
+	}
+
+	if (PQExpBufferBroken(buf))
+	{
+		log_error("Failed to build filtered SQL: out of memory");
+		(void) destroyPQExpBuffer(buf);
+		return NULL;
+	}
+
+	char *result = strdup(buf->data);
+
+	(void) destroyPQExpBuffer(buf);
+
+	return result;
+}
+
+
+/*
  * prepareFilters prepares the temporary tables that are needed on the Postgres
  * session where we want to implement a catalog query with filtering. The
  * filtering rules are then uploaded in those temp tables, and the filtering is
@@ -3539,6 +3962,29 @@ schema_fetch_table_checksum(PGSQL *pgsql, TableChecksum *sum, bool *done)
 static bool
 prepareFilters(PGSQL *pgsql, SourceFilters *filters)
 {
+	/* if the filters have already been prepared, we're good */
+	if (filters->prepared)
+	{
+		return true;
+	}
+
+	/*
+	 * On read-only sources (replicas), we can't create temp tables. Instead,
+	 * build CTE definitions that will be prepended to each query.
+	 */
+	if (filters->isReadOnly)
+	{
+		if (!buildFilterCTEPreamble(filters))
+		{
+			log_error("Failed to build CTE preamble for read-only source");
+			return false;
+		}
+
+		filters->prepared = true;
+
+		return true;
+	}
+
 	/*
 	 * Temporary tables only are available within a session, so we need a
 	 * multi-statement connection here.
@@ -3554,12 +4000,6 @@ prepareFilters(PGSQL *pgsql, SourceFilters *filters)
 				  "non PGSQL_CONNECTION_MULTI_STATEMENT connection");
 		pgsql_finish(pgsql);
 		return false;
-	}
-
-	/* if the filters have already been prepared, we're good */
-	if (filters->prepared)
-	{
-		return true;
 	}
 
 	/*
@@ -3633,7 +4073,7 @@ prepareFilters(PGSQL *pgsql, SourceFilters *filters)
 
 /*
  * prepareFilterCopyExcludeSchema sends a COPY from STDIN query and then
- * uploads the local filters that we have in the pg_temp.filter_exclude_schema
+ * uploads the local filters that we have in the filter_exclude_schema
  * table.
  */
 static bool
@@ -3678,7 +4118,7 @@ prepareFilterCopyExcludeSchema(PGSQL *pgsql, SourceFilters *filters)
  * uploads the local filters that we have in the
  * pg_temp.filter_include_only_schema table.
  *
- * Then it prepares the pg_temp.filter_exclude_schema table with all the schema
+ * Then it prepares the filter_exclude_schema table with all the schema
  * names found in pg_namespace that are not in the include-only-schema list.
  */
 static bool
