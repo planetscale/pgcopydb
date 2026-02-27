@@ -5,6 +5,12 @@
 * Update all test infrastructure to PostgreSQL 17
 * Update CI pipeline to test against PostgreSQL 16, 17, and 18
 
+### Fixed
+* Fix "database source is already in use" error when using `--follow` with `--filters` (#829, #871, #910)
+* Fix catalog mismatch errors when using different commands in sequence with filters (#869, #868)
+* Fix transaction state management for `clone --follow --snapshot` workflows
+* Make catalog_attach() idempotent to prevent concurrent process conflicts
+
 ### pgcopydb v0.17 (August 7, 2024) ###
 
 pgcopydb v0.17 is mostly a bugfix release. New features include

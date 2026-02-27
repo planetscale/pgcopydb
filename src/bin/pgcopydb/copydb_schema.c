@@ -81,7 +81,8 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 		}
 
 		/* we might have to prepare the snapshot locally */
-		if (specs->sourceSnapshot.state == SNAPSHOT_STATE_UNKNOWN)
+		if (specs->sourceSnapshot.state == SNAPSHOT_STATE_UNKNOWN ||
+			specs->sourceSnapshot.state == SNAPSHOT_STATE_CLOSED)
 		{
 			if (!copydb_prepare_snapshot(specs))
 			{
@@ -582,6 +583,7 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 	}
 
 	if ((specs->section == DATA_SECTION_ALL ||
+		 specs->section == DATA_SECTION_SCHEMA ||
 		 specs->section == DATA_SECTION_NAMESPACES) &&
 		!sourceDB->sections[DATA_SECTION_NAMESPACES].fetched)
 	{
