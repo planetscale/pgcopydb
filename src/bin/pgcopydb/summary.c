@@ -3478,3 +3478,212 @@ TopLevelTimingConcurrency(Summary *summary, TopLevelTiming *timing)
 
 	return concurrency;
 }
+
+
+/*
+ * summary_print_failure_report prints a summary when migration fails,
+ * showing which phases completed and resource counts.
+ */
+bool
+summary_print_failure_report(CopyDataSpec *specs)
+{
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+	sqlite3 *db = sourceDB->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: summary_print_failure_report: db is NULL");
+		return false;
+	}
+
+	CatalogCounts totalCounts = { 0 };
+
+	if (!catalog_count_objects(sourceDB, &totalCounts))
+	{
+		log_error("Failed to count catalog objects");
+		return false;
+	}
+
+	/* Query completed items from summary tables */
+	char *sql =
+		"select "
+		"  (select count(distinct tableoid) from summary "
+		"   where done_time_epoch is not null and tableoid is not null) as tables_done, "
+		"  (select count(*) from summary "
+		"   where done_time_epoch is not null and indexoid is not null) as indexes_done, "
+		"  (select count(*) from summary "
+		"   where done_time_epoch is not null and conoid is not null) as constraints_done";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		log_error("Failed to prepare summary query");
+		return false;
+	}
+
+	int rc = catalog_sql_step(&query);
+
+	if (rc != SQLITE_ROW)
+	{
+		log_error("Failed to query summary counts");
+		(void) catalog_sql_finalize(&query);
+		return false;
+	}
+
+	uint64_t tablesDone = sqlite3_column_int64(query.ppStmt, 0);
+	uint64_t indexesDone = sqlite3_column_int64(query.ppStmt, 1);
+	uint64_t constraintsDone = sqlite3_column_int64(query.ppStmt, 2);
+
+	(void) catalog_sql_finalize(&query);
+
+	/* Print the failure report */
+	fformat(stdout, "\n");
+	fformat(stdout, "Migration Failed\n");
+	fformat(stdout, "================\n\n");
+
+	/* Iterate through timing sections to see what completed */
+	TimingIterator *iter = (TimingIterator *) calloc(1, sizeof(TimingIterator));
+
+	if (iter == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	iter->catalog = sourceDB;
+
+	if (!semaphore_lock(&(sourceDB->sema)))
+	{
+		return false;
+	}
+
+	if (!summary_iter_timing_init(iter))
+	{
+		(void) semaphore_unlock(&(sourceDB->sema));
+		return false;
+	}
+
+	bool foundFailure = false;
+	TimingSection failedSection = TIMING_SECTION_UNKNOWN;
+
+	fformat(stdout, "Completed Phases:\n");
+
+	for (;;)
+	{
+		if (!summary_iter_timing_next(iter))
+		{
+			(void) semaphore_unlock(&(sourceDB->sema));
+			return false;
+		}
+
+		TopLevelTiming *timing = iter->timing;
+
+		if (timing == NULL)
+		{
+			break;
+		}
+
+		/* Skip unknown and total sections */
+		if (timing->section == TIMING_SECTION_UNKNOWN ||
+			timing->section == TIMING_SECTION_TOTAL ||
+			timing->section == TIMING_SECTION_TOTAL_DATA)
+		{
+			continue;
+		}
+
+		if (timing->doneTime > 0)
+		{
+			char duration[INTERVAL_MAXLEN] = { 0 };
+			IntervalToString(timing->durationMs, duration, sizeof(duration));
+
+			fformat(stdout, "  ✓ %s - %s\n", timing->label, duration);
+		}
+		else if (timing->startTime > 0 && !foundFailure)
+		{
+			/* This phase started but didn't finish - this is where we failed */
+			foundFailure = true;
+			failedSection = timing->section;
+		}
+	}
+
+	if (!summary_iter_timing_finish(iter))
+	{
+		(void) semaphore_unlock(&(sourceDB->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(sourceDB->sema));
+
+	/* Print failure location */
+	fformat(stdout, "\n");
+
+	if (foundFailure && failedSection != TIMING_SECTION_UNKNOWN)
+	{
+		TopLevelTiming *failedTiming = &topLevelTimingArray[failedSection];
+		fformat(stdout, "Failed at: %s\n", failedTiming->label);
+
+		/* Show specific progress for the failed section */
+		switch (failedSection)
+		{
+			case TIMING_SECTION_COPY_DATA:
+			{
+				fformat(stdout, "  Progress: %lld/%lld tables copied\n",
+						(long long) tablesDone,
+						(long long) totalCounts.tables);
+				break;
+			}
+
+			case TIMING_SECTION_CREATE_INDEX:
+			{
+				fformat(stdout, "  Progress: %lld/%lld indexes created\n",
+						(long long) indexesDone,
+						(long long) totalCounts.indexes);
+				break;
+			}
+
+			case TIMING_SECTION_ALTER_TABLE:
+			{
+				fformat(stdout, "  Progress: %lld/%lld constraints created\n",
+						(long long) constraintsDone,
+						(long long) totalCounts.constraints);
+				break;
+			}
+
+			default:
+			{
+				break;
+			}
+		}
+	}
+	else
+	{
+		fformat(stdout, "Failed before any phase completed\n");
+	}
+
+	/* Print resource summary */
+	fformat(stdout, "\n");
+	fformat(stdout, "Resource Summary:\n");
+	fformat(stdout, "  Tables:      %lld/%lld\n",
+			(long long) tablesDone,
+			(long long) totalCounts.tables);
+	fformat(stdout, "  Indexes:     %lld/%lld\n",
+			(long long) indexesDone,
+			(long long) totalCounts.indexes);
+	fformat(stdout, "  Constraints: %lld/%lld\n",
+			(long long) constraintsDone,
+			(long long) totalCounts.constraints);
+	fformat(stdout, "  Sequences:   %lld found\n",
+			(long long) totalCounts.sequences);
+	fformat(stdout, "  Views:       %lld found\n",
+			(long long) totalCounts.views);
+	fformat(stdout, "  Triggers:    %lld found\n",
+			(long long) totalCounts.triggers);
+
+	/* Suggest resume command */
+	fformat(stdout, "\n");
+	fformat(stdout, "To resume, use: pgcopydb clone --resume\n");
+	fformat(stdout, "\n");
+
+	return true;
+}

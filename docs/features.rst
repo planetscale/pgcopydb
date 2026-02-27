@@ -260,3 +260,97 @@ After migration, verify that your schema is correct and that the ignored
 errors were indeed benign by checking the application behavior and running
 schema comparison tools.
 
+.. _visibility_and_failure_reporting:
+
+Visibility and Failure Reporting
+---------------------------------
+
+pgcopydb provides detailed visibility into database objects and comprehensive
+failure reporting to help diagnose and resolve migration issues quickly.
+
+Listing Views and Triggers
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+In addition to tables, indexes, and sequences, pgcopydb can list views
+and triggers from the source database::
+
+  $ pgcopydb list views --source <connection-string>
+       OID |                    Schema Name |                      View Name
+  ---------+--------------------------------+-------------------------------
+     17090 |                         public |                     actor_info
+     17119 |                         public |                  customer_list
+     ...
+
+  $ pgcopydb list triggers --source <connection-string>
+       OID |              Trigger Name |               Schema Name |                Table Name |  Table OID
+  ---------+---------------------------+---------------------------+---------------------------+-----------
+     17306 |              last_updated |                    public |                  customer |      17043
+     17301 |              last_updated |                    public |                     actor |      17055
+     ...
+
+These commands are useful for:
+
+  - **Pre-migration assessment**: Understanding the full scope of database
+    objects before starting a migration
+  - **Verification**: Confirming which views and triggers will be included in
+    the migration
+  - **Documentation**: Generating an inventory of database objects
+
+Views and triggers are tracked in pgcopydb's internal SQLite catalogs and
+their counts are included in summary reports.
+
+Failure Reports
+^^^^^^^^^^^^^^^
+
+When a migration fails, pgcopydb provides a detailed summary showing
+exactly what completed and what didn't. This report includes:
+
+  - **Completed phases** with their durations (e.g., "✓ COPY Data - 120s")
+  - **Failure location** showing which phase failed (e.g., "Failed at: CREATE INDEX")
+  - **Progress within the failed phase** (e.g., "Progress: 50/100 indexes created")
+  - **Resource summary** showing counts of all database objects:
+
+    - Tables copied
+    - Indexes created
+    - Constraints applied
+    - Sequences found
+    - Views found
+    - Triggers found
+
+  - **Resume instructions** suggesting the ``--resume`` flag for continuing
+    the migration
+
+Example failure report::
+
+  Migration Failed
+  ================
+
+  Completed Phases:
+    ✓ Catalog Queries - 5s
+    ✓ Dump Schema - 10s
+    ✓ Prepare Schema (pre-data) - 15s
+    ✓ COPY Data - 120s
+
+  Failed at: CREATE INDEX
+    Progress: 50/100 indexes created
+
+  Resource Summary:
+    Tables:      100/100
+    Indexes:     50/100
+    Constraints: 0/100
+    Sequences:   13 found
+    Views:       7 found
+    Triggers:    15 found
+
+  To resume, use: pgcopydb clone --resume
+
+This reporting helps identify:
+
+  - **Partial success**: What work has already been completed and doesn't need to be repeated
+  - **Failure context**: Exactly where and when the migration failed
+  - **Resource scope**: The total number of objects that need to be migrated
+  - **Next steps**: Clear guidance on how to resume or retry the migration
+
+Failure reports are automatically displayed when migrations fail during
+data copy, index creation, or schema finalization phases.
+

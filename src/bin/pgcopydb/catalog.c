@@ -82,6 +82,23 @@ static char *sourceDBcreateDDLs[] = {
 	"create unique index s_mv_rlname on s_matview(restore_list_name)",
 	"create unique index s_mv_qname on s_matview(nspname, relname)",
 
+	"create table s_view("
+	"  oid integer primary key, "
+	"  qname text, nspname text, relname text, restore_list_name text "
+	")",
+
+	"create unique index s_v_rlname on s_view(restore_list_name)",
+	"create unique index s_v_qname on s_view(nspname, relname)",
+
+	"create table s_trigger("
+	"  oid integer primary key, "
+	"  tgname text, nspname text, relname text, "
+	"  tableoid integer, restore_list_name text "
+	")",
+
+	"create unique index s_tg_rlname on s_trigger(restore_list_name)",
+	"create index s_tg_table on s_trigger(tableoid)",
+
 	"create table s_table_size("
 	"  oid integer primary key references s_table(oid), "
 	"  bytes integer, bytes_pretty text "
@@ -269,6 +286,23 @@ static char *filterDBcreateDDLs[] = {
 	"create unique index s_mv_rlname on s_matview(restore_list_name)",
 	"create unique index s_mv_qname on s_matview(nspname, relname)",
 
+	"create table s_view("
+	"  oid integer primary key, "
+	"  qname text, nspname text, relname text, restore_list_name text "
+	")",
+
+	"create unique index s_v_rlname on s_view(restore_list_name)",
+	"create unique index s_v_qname on s_view(nspname, relname)",
+
+	"create table s_trigger("
+	"  oid integer primary key, "
+	"  tgname text, nspname text, relname text, "
+	"  tableoid integer, restore_list_name text "
+	")",
+
+	"create unique index s_tg_rlname on s_trigger(restore_list_name)",
+	"create index s_tg_table on s_trigger(tableoid)",
+
 	"create table s_table_size("
 	"  oid integer primary key references s_table(oid), "
 	"  bytes integer, bytes_pretty text "
@@ -410,7 +444,24 @@ static char *targetDBcreateDDLs[] = {
 	"  oid integer primary key, conname text, "
 	"  indexoid references s_index(oid), "
 	"  condeferrable bool, condeferred bool, sql text "
-	")"
+	")",
+
+	"create table s_view("
+	"  oid integer primary key, "
+	"  qname text, nspname text, relname text, restore_list_name text "
+	")",
+
+	"create unique index s_v_rlname on s_view(restore_list_name)",
+	"create unique index s_v_qname on s_view(nspname, relname)",
+
+	"create table s_trigger("
+	"  oid integer primary key, "
+	"  tgname text, nspname text, relname text, "
+	"  tableoid integer, restore_list_name text "
+	")",
+
+	"create unique index s_tg_rlname on s_trigger(restore_list_name)",
+	"create index s_tg_table on s_trigger(tableoid)"
 };
 
 
@@ -422,6 +473,8 @@ static char *sourceDBdropDDLs[] = {
 	"drop table if exists s_database_property",
 	"drop table if exists s_table",
 	"drop table if exists s_matview",
+	"drop table if exists s_view",
+	"drop table if exists s_trigger",
 	"drop table if exists s_attr",
 	"drop table if exists s_table_part",
 	"drop table if exists s_table_chksum",
@@ -456,6 +509,8 @@ static char *filterDBdropDDLs[] = {
 	"drop table if exists s_namespace",
 	"drop table if exists s_table",
 	"drop table if exists s_matview",
+	"drop table if exists s_view",
+	"drop table if exists s_trigger",
 	"drop table if exists s_attr",
 	"drop table if exists s_table_part",
 	"drop table if exists s_table_chksum",
@@ -477,7 +532,9 @@ static char *targetDBdropDDLs[] = {
 	"drop table if exists s_table",
 	"drop table if exists s_attr",
 	"drop table if exists s_index",
-	"drop table if exists s_constraint"
+	"drop table if exists s_constraint",
+	"drop table if exists s_view",
+	"drop table if exists s_trigger"
 };
 
 
@@ -2104,6 +2161,645 @@ catalog_s_matview_fetch(SQLiteQuery *query)
 
 
 /*
+ * catalog_add_s_view INSERTs a SourceView to our internal catalogs database.
+ */
+bool
+catalog_add_s_view(DatabaseCatalog *catalog, SourceView *view)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_add_s_view: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"insert or ignore into s_view("
+		"  oid, qname, nspname, relname, restore_list_name) "
+		"values($1, $2, $3, $4, $5)";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "oid", view->oid, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "qname", 0, view->qname },
+		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, view->nspname },
+		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, view->relname },
+		{ BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
+		  view->restoreListName },
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_lookup_s_view_by_oid fetches a s_view entry from catalog.
+ */
+bool
+catalog_lookup_s_view_by_oid(DatabaseCatalog *catalog,
+							 SourceView *result,
+							 uint32_t oid)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_lookup_s_view_by_oid: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"  select oid, qname, nspname, relname, restore_list_name"
+		"    from s_view "
+		"   where oid = $1 ";
+
+	SQLiteQuery query = {
+		.context = result,
+		.fetchFunction = &catalog_s_view_fetch
+	};
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "oid", oid, NULL },
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_iter_s_view iterates over the list of views in our catalogs.
+ */
+bool
+catalog_iter_s_view(DatabaseCatalog *catalog,
+					void *context,
+					SourceViewIterFun *callback)
+{
+	SourceViewIterator *iter =
+		(SourceViewIterator *) calloc(1, sizeof(SourceViewIterator));
+
+	iter->catalog = catalog;
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_iter_s_view_init(iter))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	for (;;)
+	{
+		if (!catalog_iter_s_view_next(iter))
+		{
+			/* errors have already been logged */
+			(void) semaphore_unlock(&(catalog->sema));
+			return false;
+		}
+
+		SourceView *view = iter->view;
+
+		if (view == NULL)
+		{
+			if (!catalog_iter_s_view_finish(iter))
+			{
+				/* errors have already been logged */
+				(void) semaphore_unlock(&(catalog->sema));
+				return false;
+			}
+
+			break;
+		}
+
+		/* now call the provided callback */
+		if (!(*callback)(context, view))
+		{
+			log_error("Failed to iterate over list of views, "
+					  "see above for details");
+			(void) semaphore_unlock(&(catalog->sema));
+			return false;
+		}
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
+ * catalog_iter_s_view_init initializes an Iterator over our catalog of
+ * SourceView entries.
+ */
+bool
+catalog_iter_s_view_init(SourceViewIterator *iter)
+{
+	sqlite3 *db = iter->catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: Failed to initialize view iterator: db is NULL");
+		return false;
+	}
+
+	iter->view = (SourceView *) calloc(1, sizeof(SourceView));
+
+	if (iter->view == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	char *sql =
+		"  select oid, qname, nspname, relname, restore_list_name "
+		"    from s_view "
+		"order by oid";
+
+	SQLiteQuery *query = &(iter->query);
+
+	query->context = iter->view;
+	query->fetchFunction = &catalog_s_view_fetch;
+
+	if (!catalog_sql_prepare(db, sql, query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_iter_s_view_next fetches the next SourceView entry in our catalogs.
+ */
+bool
+catalog_iter_s_view_next(SourceViewIterator *iter)
+{
+	SQLiteQuery *query = &(iter->query);
+
+	int rc = catalog_sql_step(query);
+
+	if (rc == SQLITE_DONE)
+	{
+		iter->view = NULL;
+
+		return true;
+	}
+
+	if (rc != SQLITE_ROW)
+	{
+		log_error("Failed to step through statement: %s", query->sql);
+		log_error("[SQLite] %s", sqlite3_errmsg(query->db));
+		return false;
+	}
+
+	return catalog_s_view_fetch(query);
+}
+
+
+/*
+ * catalog_iter_s_view_finish cleans-up the internal memory used for the
+ * iteration.
+ */
+bool
+catalog_iter_s_view_finish(SourceViewIterator *iter)
+{
+	SQLiteQuery *query = &(iter->query);
+
+	/* in case we finish before reaching the DONE step */
+	if (iter->view != NULL)
+	{
+		iter->view = NULL;
+	}
+
+	if (!catalog_sql_finalize(query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_s_view_fetch is a SQLiteQuery callback.
+ */
+bool
+catalog_s_view_fetch(SQLiteQuery *query)
+{
+	SourceView *view = (SourceView *) query->context;
+
+	/* cleanup the memory area before re-use */
+	bzero(view, sizeof(SourceView));
+
+	view->oid = sqlite3_column_int64(query->ppStmt, 0);
+
+	if (sqlite3_column_type(query->ppStmt, 1) != SQLITE_NULL)
+	{
+		strlcpy(view->qname,
+				(char *) sqlite3_column_text(query->ppStmt, 1),
+				sizeof(view->qname));
+	}
+
+	if (sqlite3_column_type(query->ppStmt, 2) != SQLITE_NULL)
+	{
+		strlcpy(view->nspname,
+				(char *) sqlite3_column_text(query->ppStmt, 2),
+				sizeof(view->nspname));
+	}
+
+	if (sqlite3_column_type(query->ppStmt, 3) != SQLITE_NULL)
+	{
+		strlcpy(view->relname,
+				(char *) sqlite3_column_text(query->ppStmt, 3),
+				sizeof(view->relname));
+	}
+
+	if (sqlite3_column_type(query->ppStmt, 4) != SQLITE_NULL)
+	{
+		strlcpy(view->restoreListName,
+				(char *) sqlite3_column_text(query->ppStmt, 4),
+				sizeof(view->restoreListName));
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_add_s_trigger INSERTs a SourceTrigger to our internal catalogs database.
+ */
+bool
+catalog_add_s_trigger(DatabaseCatalog *catalog, SourceTrigger *trigger)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_add_s_trigger: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"insert or ignore into s_trigger("
+		"  oid, tgname, nspname, relname, tableoid, restore_list_name) "
+		"values($1, $2, $3, $4, $5, $6)";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "oid", trigger->oid, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "tgname", 0, trigger->tgname },
+		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, trigger->nspname },
+		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, trigger->relname },
+		{ BIND_PARAMETER_TYPE_INT64, "tableoid", trigger->tableoid, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "restore_list_name", 0,
+		  trigger->restoreListName },
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_lookup_s_trigger_by_oid fetches a s_trigger entry from catalog.
+ */
+bool
+catalog_lookup_s_trigger_by_oid(DatabaseCatalog *catalog,
+								SourceTrigger *result,
+								uint32_t oid)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_lookup_s_trigger_by_oid: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"  select oid, tgname, nspname, relname, tableoid, restore_list_name"
+		"    from s_trigger "
+		"   where oid = $1 ";
+
+	SQLiteQuery query = {
+		.context = result,
+		.fetchFunction = &catalog_s_trigger_fetch
+	};
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "oid", oid, NULL },
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_iter_s_trigger iterates over the list of triggers in our catalogs.
+ */
+bool
+catalog_iter_s_trigger(DatabaseCatalog *catalog,
+					   void *context,
+					   SourceTriggerIterFun *callback)
+{
+	SourceTriggerIterator *iter =
+		(SourceTriggerIterator *) calloc(1, sizeof(SourceTriggerIterator));
+
+	iter->catalog = catalog;
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_iter_s_trigger_init(iter))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	for (;;)
+	{
+		if (!catalog_iter_s_trigger_next(iter))
+		{
+			/* errors have already been logged */
+			(void) semaphore_unlock(&(catalog->sema));
+			return false;
+		}
+
+		SourceTrigger *trigger = iter->trigger;
+
+		if (trigger == NULL)
+		{
+			if (!catalog_iter_s_trigger_finish(iter))
+			{
+				/* errors have already been logged */
+				(void) semaphore_unlock(&(catalog->sema));
+				return false;
+			}
+
+			break;
+		}
+
+		/* now call the provided callback */
+		if (!(*callback)(context, trigger))
+		{
+			log_error("Failed to iterate over list of triggers, "
+					  "see above for details");
+			(void) semaphore_unlock(&(catalog->sema));
+			return false;
+		}
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
+ * catalog_iter_s_trigger_init initializes an Iterator over our catalog of
+ * SourceTrigger entries.
+ */
+bool
+catalog_iter_s_trigger_init(SourceTriggerIterator *iter)
+{
+	sqlite3 *db = iter->catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: Failed to initialize trigger iterator: db is NULL");
+		return false;
+	}
+
+	iter->trigger = (SourceTrigger *) calloc(1, sizeof(SourceTrigger));
+
+	if (iter->trigger == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	char *sql =
+		"  select oid, tgname, nspname, relname, tableoid, restore_list_name "
+		"    from s_trigger "
+		"order by tableoid, oid";
+
+	SQLiteQuery *query = &(iter->query);
+
+	query->context = iter->trigger;
+	query->fetchFunction = &catalog_s_trigger_fetch;
+
+	if (!catalog_sql_prepare(db, sql, query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_iter_s_trigger_next fetches the next SourceTrigger entry in our catalogs.
+ */
+bool
+catalog_iter_s_trigger_next(SourceTriggerIterator *iter)
+{
+	SQLiteQuery *query = &(iter->query);
+
+	int rc = catalog_sql_step(query);
+
+	if (rc == SQLITE_DONE)
+	{
+		iter->trigger = NULL;
+
+		return true;
+	}
+
+	if (rc != SQLITE_ROW)
+	{
+		log_error("Failed to step through statement: %s", query->sql);
+		log_error("[SQLite] %s", sqlite3_errmsg(query->db));
+		return false;
+	}
+
+	return catalog_s_trigger_fetch(query);
+}
+
+
+/*
+ * catalog_iter_s_trigger_finish cleans-up the internal memory used for the
+ * iteration.
+ */
+bool
+catalog_iter_s_trigger_finish(SourceTriggerIterator *iter)
+{
+	SQLiteQuery *query = &(iter->query);
+
+	/* in case we finish before reaching the DONE step */
+	if (iter->trigger != NULL)
+	{
+		iter->trigger = NULL;
+	}
+
+	if (!catalog_sql_finalize(query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_s_trigger_fetch is a SQLiteQuery callback.
+ */
+bool
+catalog_s_trigger_fetch(SQLiteQuery *query)
+{
+	SourceTrigger *trigger = (SourceTrigger *) query->context;
+
+	/* cleanup the memory area before re-use */
+	bzero(trigger, sizeof(SourceTrigger));
+
+	trigger->oid = sqlite3_column_int64(query->ppStmt, 0);
+
+	if (sqlite3_column_type(query->ppStmt, 1) != SQLITE_NULL)
+	{
+		strlcpy(trigger->tgname,
+				(char *) sqlite3_column_text(query->ppStmt, 1),
+				sizeof(trigger->tgname));
+	}
+
+	if (sqlite3_column_type(query->ppStmt, 2) != SQLITE_NULL)
+	{
+		strlcpy(trigger->nspname,
+				(char *) sqlite3_column_text(query->ppStmt, 2),
+				sizeof(trigger->nspname));
+	}
+
+	if (sqlite3_column_type(query->ppStmt, 3) != SQLITE_NULL)
+	{
+		strlcpy(trigger->relname,
+				(char *) sqlite3_column_text(query->ppStmt, 3),
+				sizeof(trigger->relname));
+	}
+
+	trigger->tableoid = sqlite3_column_int64(query->ppStmt, 4);
+
+	if (sqlite3_column_type(query->ppStmt, 5) != SQLITE_NULL)
+	{
+		strlcpy(trigger->restoreListName,
+				(char *) sqlite3_column_text(query->ppStmt, 5),
+				sizeof(trigger->restoreListName));
+	}
+
+	return true;
+}
+
+
+/*
  * catalog_add_s_table INSERTs a SourceTable to our internal catalogs database.
  */
 bool
@@ -2598,6 +3294,8 @@ catalog_count_objects(DatabaseCatalog *catalog, CatalogCounts *count)
 				"       (select count(1) as idx from s_index), "
 				"       (select count(1) as con from s_constraint),"
 				"       (select count(1) as seq from s_seq),"
+				"       (select count(1) as viw from s_view),"
+				"       (select count(1) as trg from s_trigger),"
 				"       0 as rol,"
 				"       (select count(1) as dat from s_database),"
 				"       0 as nsp,"
@@ -2614,6 +3312,8 @@ catalog_count_objects(DatabaseCatalog *catalog, CatalogCounts *count)
 				"       (select count(1) as idx from s_index), "
 				"       (select count(1) as con from s_constraint),"
 				"       (select count(1) as seq from s_seq),"
+				"       (select count(1) as viw from s_view),"
+				"       (select count(1) as trg from s_trigger),"
 				"       0 as rol,"
 				"       0 as dat,"
 				"       (select count(1) as nsp from s_namespace),"
@@ -2630,6 +3330,8 @@ catalog_count_objects(DatabaseCatalog *catalog, CatalogCounts *count)
 				"       (select count(1) as idx from s_index), "
 				"       (select count(1) as con from s_constraint),"
 				"       0 as seq,"
+				"       (select count(1) as viw from s_view),"
+				"       (select count(1) as trg from s_trigger),"
 				"       (select count(1) as rol from s_role),"
 				"       0 as dat,"
 				"       (select count(1) as nsp from s_namespace),"
@@ -2682,13 +3384,15 @@ catalog_count_fetch(SQLiteQuery *query)
 	count->indexes = sqlite3_column_int64(query->ppStmt, 1);
 	count->constraints = sqlite3_column_int64(query->ppStmt, 2);
 	count->sequences = sqlite3_column_int64(query->ppStmt, 3);
+	count->views = sqlite3_column_int64(query->ppStmt, 4);
+	count->triggers = sqlite3_column_int64(query->ppStmt, 5);
 
-	count->roles = sqlite3_column_int64(query->ppStmt, 4);
-	count->databases = sqlite3_column_int64(query->ppStmt, 5);
-	count->namespaces = sqlite3_column_int64(query->ppStmt, 6);
-	count->extensions = sqlite3_column_int64(query->ppStmt, 7);
-	count->colls = sqlite3_column_int64(query->ppStmt, 8);
-	count->depends = sqlite3_column_int64(query->ppStmt, 9);
+	count->roles = sqlite3_column_int64(query->ppStmt, 6);
+	count->databases = sqlite3_column_int64(query->ppStmt, 7);
+	count->namespaces = sqlite3_column_int64(query->ppStmt, 8);
+	count->extensions = sqlite3_column_int64(query->ppStmt, 9);
+	count->colls = sqlite3_column_int64(query->ppStmt, 10);
+	count->depends = sqlite3_column_int64(query->ppStmt, 11);
 
 	return true;
 }

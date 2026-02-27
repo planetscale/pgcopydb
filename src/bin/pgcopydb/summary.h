@@ -22,6 +22,9 @@
 #include "string_utils.h"
 #include "schema.h"
 
+/* forward declarations */
+typedef struct CopyDataSpec CopyDataSpec;
+
 typedef struct CopyTableSummary
 {
 	pid_t pid;                  /* pid */
@@ -190,6 +193,8 @@ bool summary_lookup_timing(DatabaseCatalog *catalog,
 
 bool summary_pretty_print_timing(DatabaseCatalog *catalog,
 								 TopLevelTiming *timing);
+
+bool summary_print_failure_report(CopyDataSpec *specs);
 
 /*
  * Summary Iterator

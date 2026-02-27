@@ -602,6 +602,7 @@ cloneDB(CopyDataSpec *copySpecs)
 	if (!copydb_copy_all_table_data(copySpecs))
 	{
 		/* errors have already been logged */
+		(void) summary_print_failure_report(copySpecs);
 		return false;
 	}
 
@@ -611,6 +612,7 @@ cloneDB(CopyDataSpec *copySpecs)
 	{
 		log_error("Failed to finalize schema on the target database, "
 				  "see above for details");
+		(void) summary_print_failure_report(copySpecs);
 		return false;
 	}
 
