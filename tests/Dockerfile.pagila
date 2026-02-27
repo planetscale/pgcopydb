@@ -1,6 +1,10 @@
 ARG PGVERSION=16
+ARG PGCOPYDB_IMAGE=pgcopydb:latest
 
-FROM debian:bullseye-slim
+# Create a named stage from the pgcopydb image for COPY --from
+FROM $PGCOPYDB_IMAGE as pgcopydb_source
+
+FROM debian:bookworm-slim
 
 ARG PGVERSION
 
@@ -27,7 +31,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 RUN curl https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
-RUN echo "deb http://apt.postgresql.org/pub/repos/apt bullseye-pgdg main ${PGVERSION}" > /etc/apt/sources.list.d/pgdg.list
+RUN echo "deb http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main ${PGVERSION}" > /etc/apt/sources.list.d/pgdg.list
 
 # bypass initdb of a "main" cluster
 RUN echo 'create_main_cluster = false' | sudo tee -a /etc/postgresql-common/createcluster.conf
@@ -44,8 +48,8 @@ RUN git clone --depth 1 https://github.com/devrimgunduz/pagila.git
 RUN useradd -rm -d /var/lib/postgres -s /bin/bash -g postgres -G sudo docker
 RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
-COPY --from=pgcopydb /usr/local/bin/sqlite3 /usr/local/bin
-COPY --from=pgcopydb /usr/local/bin/pgcopydb /usr/local/bin
+COPY --from=pgcopydb_source /usr/local/bin/sqlite3 /usr/local/bin
+COPY --from=pgcopydb_source /usr/local/bin/pgcopydb /usr/local/bin
 
 COPY .psqlrc /var/lib/postgres
 COPY .sqliterc /var/lib/postgres

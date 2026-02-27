@@ -3387,10 +3387,14 @@ pg_copy_large_object(PGSQL *src,
 	 *    When using --drop-if-exists, we first try to unlink the
 	 *    target large object, then copy the data all over again.
 	 *
-	 *    In normal cases `pg_dump --section=pre-data` outputs the
-	 *    large object metadata and we only have to take care of the
-	 *    contents of the large objects.
+	 *    In PostgreSQL 16 and earlier, `pg_dump --section=pre-data` outputs
+	 *    the large object metadata and we only have to take care of the
+	 *    contents of the large objects. Starting with PostgreSQL 17, pg_dump
+	 *    no longer includes large object metadata in pre-data, so we need to
+	 *    create the large object if it doesn't exist.
 	 */
+	bool needsCreate = false;
+
 	if (dropIfExists)
 	{
 		if (!lo_unlink(dst->connection, blobOid))
@@ -3399,6 +3403,63 @@ pg_copy_large_object(PGSQL *src,
 			log_debug("Failed to delete large object %u", blobOid);
 		}
 
+		/* After unlinking, always need to create */
+		needsCreate = true;
+	}
+	else
+	{
+		/*
+		 * Check if the large object already exists by querying
+		 * pg_largeobject_metadata. This handles both PG 16 (where pg_dump
+		 * creates it) and PG 17+ (where it doesn't).
+		 *
+		 * We use a catalog query instead of lo_open() because lo_open() on a
+		 * non-existent OID causes a transaction error that would abort the
+		 * current transaction.
+		 */
+		char sql[BUFSIZE] = { 0 };
+		PGresult *result;
+
+		sformat(sql, sizeof(sql),
+				"SELECT EXISTS(SELECT 1 FROM pg_largeobject_metadata WHERE oid = %u)",
+				blobOid);
+
+		result = PQexec(dst->connection, sql);
+
+		if (PQresultStatus(result) != PGRES_TUPLES_OK)
+		{
+			char context[BUFSIZE] = { 0 };
+
+			sformat(context, sizeof(context),
+					"Failed to check if large object %u exists", blobOid);
+
+			(void) pgcopy_log_error(dst, result, context);
+
+			PQclear(result);
+			lo_close(src->connection, srcfd);
+			pgsql_finish(src);
+			pgsql_finish(dst);
+
+			return false;
+		}
+
+		bool exists = (strcmp(PQgetvalue(result, 0, 0), "t") == 0);
+		PQclear(result);
+
+		if (!exists)
+		{
+			/* Large object doesn't exist (PG 17+ case), need to create it */
+			needsCreate = true;
+		}
+		else
+		{
+			/* Large object exists (PG 16 case) */
+			log_debug("Large object %u already exists on target", blobOid);
+		}
+	}
+
+	if (needsCreate)
+	{
 		Oid dstBlobOid = lo_create(dst->connection, blobOid);
 
 		if (dstBlobOid != blobOid)

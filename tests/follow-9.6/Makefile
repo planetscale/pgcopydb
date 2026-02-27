@@ -9,16 +9,16 @@ COMPOSE_EXIT = --exit-code-from=test --abort-on-container-exit
 test: down run down ;
 
 up: down build
-	docker compose up $(COMPOSE_EXIT)
+	$(DOCKER) compose up $(COMPOSE_EXIT)
 
 run: build fix-volumes
-	docker compose run test
+	$(DOCKER) compose run test
 
 down:
-	docker compose down --volumes --remove-orphans
+	$(DOCKER) compose down --volumes --remove-orphans
 
 build:
-	docker compose build
+	$(DOCKER) compose build
 
 VPATH   = /var/run/pgcopydb
 CNAME   = follow-9.6
