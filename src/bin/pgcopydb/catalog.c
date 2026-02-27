@@ -5731,7 +5731,8 @@ bool
 catalog_prepare_filter(DatabaseCatalog *catalog,
 					   bool skipExtensions,
 					   bool skipCollations,
-					   bool skipPublications)
+					   bool skipPublications,
+					   SourceFilters *filters)
 {
 	sqlite3 *db = catalog->db;
 
@@ -5847,8 +5848,24 @@ catalog_prepare_filter(DatabaseCatalog *catalog,
 	/*
 	 * In some cases with sequences we might want to skip adding a dependency
 	 * in our hash table here. See the previous discussion for details.
+	 *
+	 * When extension filtering is active, exclude extension dependencies
+	 * (deptype='e') because they will be inserted separately with
+	 * kind='extension-object' later.
 	 */
+	bool hasExtensionFilters = (filters != NULL) &&
+							   (filters->excludeExtensionList.count > 0 ||
+								filters->includeOnlyExtensionList.count > 0);
+
 	char *s_depend_sql =
+		hasExtensionFilters ?
+		"insert or ignore into filter(oid, restore_list_name, kind) "
+		"     select distinct objid, identity as restore_list_name, 'pg_depend' "
+		"       from s_depend d "
+		"      where not exists"
+		"            (select 1 from source.s_seq ss where ss.oid = d.objid) "
+		"        and d.deptype != 'e' "  /* Exclude extension dependencies */
+		:
 		"insert or ignore into filter(oid, restore_list_name, kind) "
 		"     select distinct objid, identity as restore_list_name, 'pg_depend' "
 		"       from s_depend d "
@@ -5869,7 +5886,7 @@ catalog_prepare_filter(DatabaseCatalog *catalog,
 	}
 
 	/*
-	 * Implement --skip-extensions
+	 * Implement --skip-extensions and extension filtering
 	 */
 	if (skipExtensions)
 	{
@@ -5889,6 +5906,209 @@ catalog_prepare_filter(DatabaseCatalog *catalog,
 		{
 			/* errors have already been logged */
 			return false;
+		}
+	}
+	else if (filters != NULL)
+	{
+		/* Handle exclude-extension filtering */
+		if (filters->excludeExtensionList.count > 0)
+		{
+			for (int i = 0; i < filters->excludeExtensionList.count; i++)
+			{
+				SourceFilterExtension *ext = &filters->excludeExtensionList.array[i];
+
+				char *filter_ext_sql =
+					"insert or ignore into filter(oid, restore_list_name, kind) "
+					"     select oid, extname, 'extension' "
+					"       from s_extension "
+					"      where extname = $1";
+
+				if (!catalog_sql_prepare(db, filter_ext_sql, &query))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
+				BindParam params[] = {
+					{ BIND_PARAMETER_TYPE_TEXT, "extname", 0, ext->extname }
+				};
+
+				int count = sizeof(params) / sizeof(params[0]);
+
+				if (!catalog_sql_bind(&query, params, count))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
+				if (!catalog_sql_execute_once(&query))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
+				log_info("Filtering out extension \"%s\"", ext->extname);
+			}
+		}
+
+		/* Handle include-only-extension filtering */
+		if (filters->includeOnlyExtensionList.count > 0)
+		{
+			/* Build a NOT IN clause for extensions to keep */
+			char extlist[BUFSIZE] = { 0 };
+			int pos = 0;
+
+			for (int i = 0; i < filters->includeOnlyExtensionList.count; i++)
+			{
+				SourceFilterExtension *ext =
+					&filters->includeOnlyExtensionList.array[i];
+
+				if (i > 0)
+				{
+					pos += sformat(extlist + pos, sizeof(extlist) - pos, ", ");
+				}
+
+				pos += sformat(extlist + pos, sizeof(extlist) - pos, "'%s'",
+							   ext->extname);
+			}
+
+			char include_ext_sql[BUFSIZE] = { 0 };
+
+			sformat(include_ext_sql, sizeof(include_ext_sql),
+					"insert or ignore into filter(oid, restore_list_name, kind) "
+					"     select oid, extname, 'extension' "
+					"       from s_extension "
+					"      where extname not in (%s)", extlist);
+
+			if (!catalog_sql_prepare(db, include_ext_sql, &query))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			if (!catalog_sql_execute_once(&query))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			log_info("Filtering extensions to keep only: %s", extlist);
+		}
+
+		/*
+		 * Filter all database objects that belong to filtered extensions.
+		 * This includes: tables, functions, types, operators, schemas, etc.
+		 *
+		 * We query s_depend for all dependencies where:
+		 * - refobjid matches an extension OID in the filter table
+		 * - deptype = 'e' (extension membership)
+		 */
+		if (filters->excludeExtensionList.count > 0 ||
+			filters->includeOnlyExtensionList.count > 0)
+		{
+			char *filter_extension_objects_sql =
+				"INSERT OR IGNORE INTO filter(oid, restore_list_name, kind) "
+				"SELECT DISTINCT d.objid, d.identity, 'extension-object' "
+				"FROM s_depend d "
+				"WHERE d.refobjid IN (SELECT oid FROM filter WHERE kind = 'extension') "
+				"  AND d.deptype = 'e'";
+
+			if (!catalog_sql_prepare(db, filter_extension_objects_sql, &query))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			if (!catalog_sql_execute_once(&query))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			log_info("Filtered extension-owned database objects");
+
+			/*
+			 * Query back the filtered extension-owned tables and add them to
+			 * filters->excludeTableList so they're serialized to JSON and
+			 * available during CDC replay. This ensures CDC filtering works
+			 * correctly for extension-owned objects.
+			 */
+			char *query_filtered_tables_sql =
+				"SELECT DISTINCT t.nspname, t.relname "
+				"FROM filter f "
+				"JOIN s_table t ON f.oid = t.oid "
+				"WHERE f.kind = 'extension-object'";
+
+			if (!catalog_sql_prepare(db, query_filtered_tables_sql, &query))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			/* Count how many tables we need to add */
+			int filtered_table_count = 0;
+			while (catalog_sql_step(&query) == SQLITE_ROW)
+			{
+				filtered_table_count++;
+			}
+
+			if (!catalog_sql_finalize(&query))
+			{
+				return false;
+			}
+
+			if (filtered_table_count > 0)
+			{
+				/* Resize the excludeTableList to accommodate new entries */
+				int new_count = filters->excludeTableList.count + filtered_table_count;
+				SourceFilterTable *new_array =
+					(SourceFilterTable *) realloc(
+						filters->excludeTableList.array,
+						new_count * sizeof(SourceFilterTable));
+
+				if (new_array == NULL)
+				{
+					log_error(ALLOCATION_FAILED_ERROR);
+					return false;
+				}
+
+				filters->excludeTableList.array = new_array;
+
+				/* Query again and populate the array */
+				if (!catalog_sql_prepare(db, query_filtered_tables_sql, &query))
+				{
+					return false;
+				}
+
+				int idx = filters->excludeTableList.count;
+				while (catalog_sql_step(&query) == SQLITE_ROW)
+				{
+					const char *nspname = (const char *) sqlite3_column_text(query.ppStmt,
+																			 0);
+					const char *relname = (const char *) sqlite3_column_text(query.ppStmt,
+																			 1);
+
+					strlcpy(filters->excludeTableList.array[idx].nspname,
+							nspname, PG_NAMEDATALEN);
+					strlcpy(filters->excludeTableList.array[idx].relname,
+							relname, PG_NAMEDATALEN);
+
+					log_debug("Added extension-owned table to exclude list: %s.%s",
+							  nspname, relname);
+					idx++;
+				}
+
+				filters->excludeTableList.count = new_count;
+
+				if (!catalog_sql_finalize(&query))
+				{
+					return false;
+				}
+
+				log_info(
+					"Added %d extension-owned tables to exclude list for CDC filtering",
+					filtered_table_count);
+			}
 		}
 	}
 

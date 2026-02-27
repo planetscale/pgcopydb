@@ -22,7 +22,9 @@ typedef enum
 	SOURCE_FILTER_EXCLUDE_TABLE,
 	SOURCE_FILTER_EXCLUDE_TABLE_DATA,
 	SOURCE_FILTER_EXCLUDE_INDEX,
-	SOURCE_FILTER_INCLUDE_ONLY_TABLE
+	SOURCE_FILTER_INCLUDE_ONLY_TABLE,
+	SOURCE_FILTER_EXCLUDE_EXTENSION,
+	SOURCE_FILTER_INCLUDE_ONLY_EXTENSION
 } SourceFilterSection;
 
 typedef struct SourceFilterSchema
@@ -35,6 +37,17 @@ typedef struct SourceFilterSchemaList
 	int count;
 	SourceFilterSchema *array;  /* malloc'ed area */
 } SourceFilterSchemaList;
+
+typedef struct SourceFilterExtension
+{
+	char extname[PG_NAMEDATALEN];
+} SourceFilterExtension;
+
+typedef struct SourceFilterExtensionList
+{
+	int count;
+	SourceFilterExtension *array;  /* malloc'ed area */
+} SourceFilterExtensionList;
 
 
 typedef struct SourceFilterTable
@@ -80,7 +93,10 @@ typedef enum
 	SOURCE_FILTER_TYPE_LIST_EXCL,
 
 	SOURCE_FILTER_TYPE_EXCL_INDEX,
-	SOURCE_FILTER_TYPE_LIST_EXCL_INDEX
+	SOURCE_FILTER_TYPE_LIST_EXCL_INDEX,
+
+	SOURCE_FILTER_TYPE_EXCL_EXTENSION,
+	SOURCE_FILTER_TYPE_LIST_EXCL_EXTENSION
 } SourceFilterType;
 
 typedef struct SourceFilters
@@ -93,6 +109,8 @@ typedef struct SourceFilters
 	SourceFilterTableList excludeTableList;
 	SourceFilterTableList excludeTableDataList;
 	SourceFilterTableList excludeIndexList;
+	SourceFilterExtensionList includeOnlyExtensionList;
+	SourceFilterExtensionList excludeExtensionList;
 } SourceFilters;
 
 char * filterTypeToString(SourceFilterType type);

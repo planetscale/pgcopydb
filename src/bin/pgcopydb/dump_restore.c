@@ -33,6 +33,9 @@ static bool copydb_copy_database_properties_hook(void *ctx,
 static bool copydb_write_restore_list_hook(void *ctx,
 										   ArchiveContentItem *item);
 
+static bool copydb_acl_is_filtered_out(CopyDataSpec *specs,
+									   ArchiveContentItem *item);
+
 
 /*
  * copydb_objectid_has_been_processed_already returns true when the given
@@ -825,6 +828,39 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 				   item->restoreListName);
 	}
 
+	/*
+	 * Filter ACLs for extension-owned objects.
+	 * ACL entries have objectOid=0, so we check by schema name instead.
+	 */
+	if (item->tagKind == ARCHIVE_TAG_KIND_ACL)
+	{
+		log_info(
+			"ACL ENTRY: skip=%d, isComposite=%d, tagKind=%d, objectOid=%u, desc='%s'",
+			skip, item->isCompositeTag, item->tagKind, item->objectOid,
+			item->description ? item->description : "(null)");
+	}
+
+	if (!skip &&
+		item->isCompositeTag &&
+		item->tagKind == ARCHIVE_TAG_KIND_ACL &&
+		item->objectOid == 0)
+	{
+		log_info("Checking if ACL should be filtered: %s", item->description);
+
+		if (copydb_acl_is_filtered_out(specs, item))
+		{
+			skip = true;
+
+			log_notice("Skipping ACL for extension-owned object: %s %s",
+					   item->description,
+					   item->restoreListName);
+		}
+		else
+		{
+			log_info("ACL not filtered: %s", item->description);
+		}
+	}
+
 	PQExpBuffer buf = createPQExpBuffer();
 
 	printfPQExpBuffer(buf, "%s%d; %u %u %s %s\n",
@@ -853,4 +889,75 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 	destroyPQExpBuffer(buf);
 
 	return true;
+}
+
+
+/*
+ * copydb_acl_is_filtered_out checks if an ACL statement references an
+ * extension-owned object by looking up the schema name in the filter table.
+ *
+ * ACL entries have objectOid=0, so we can't filter by OID. Instead, we:
+ * 1. Extract schema name from restore list name (e.g., "rds_tools" or "rds_tools.func")
+ * 2. Check if schema belongs to a filtered extension by looking it up in filter table
+ */
+static bool
+copydb_acl_is_filtered_out(CopyDataSpec *specs, ArchiveContentItem *item)
+{
+	DatabaseCatalog *filtersDB = &(specs->catalogs.filter);
+	char *restoreListName = item->restoreListName;
+
+	/* Safety check: ACL entries should have a restoreListName */
+	if (restoreListName == NULL)
+	{
+		log_info("ACL has no restoreListName, desc='%s'",
+				 item->description ? item->description : "(null)");
+		return false;
+	}
+
+	/*
+	 * Extract schema name from restore list name.
+	 * Formats (from pgcmd.c parse_archive_acl_or_comment):
+	 *   Schema ACL: "- <schemaname>" (e.g., "- rds_tools")
+	 *   Extension ACL: "<extname>" (e.g., "rds_tools")
+	 *   Function/Table ACL: "<schema>" (e.g., "rds_tools")
+	 */
+	char schema[PG_NAMEDATALEN] = { 0 };
+
+	if (strncmp(restoreListName, "- ", 2) == 0)
+	{
+		/* Schema ACL format: "- schemaname" - skip the "- " prefix */
+		strlcpy(schema, restoreListName + 2, sizeof(schema));
+	}
+	else
+	{
+		/* Extension or Function/Table ACL format: just use the name */
+		strlcpy(schema, restoreListName, sizeof(schema));
+	}
+
+	log_info("ACL restoreListName='%s', extracted schema='%s'",
+			 restoreListName, schema);
+
+	/*
+	 * Check if this schema name matches any filtered object (extensions or
+	 * extension-owned objects). Many extensions create schemas with the same
+	 * name as the extension (e.g., rds_tools extension creates rds_tools schema).
+	 */
+	CatalogFilter result = { 0 };
+
+	if (!catalog_lookup_filter_by_rlname(filtersDB, &result, schema))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* If we found a match in the filter table, skip this ACL */
+	if (!IS_EMPTY_STRING_BUFFER(result.restoreListName))
+	{
+		log_debug(
+			"ACL filtered for schema '%s' (matches filtered extension or extension-owned object)",
+			schema);
+		return true;
+	}
+
+	return false;
 }

@@ -452,7 +452,8 @@ bool catalog_s_seq_fetch(SQLiteQuery *query);
 bool catalog_prepare_filter(DatabaseCatalog *catalog,
 							bool skipExtensions,
 							bool skipCollations,
-							bool skipPublications);
+							bool skipPublications,
+							SourceFilters *filters);
 
 typedef struct CatalogFilter
 {

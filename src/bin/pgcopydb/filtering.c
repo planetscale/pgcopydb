@@ -65,6 +65,16 @@ filterTypeToString(SourceFilterType type)
 		{
 			return "SOURCE_FILTER_TYPE_LIST_EXCL_INDEX";
 		}
+
+		case SOURCE_FILTER_TYPE_EXCL_EXTENSION:
+		{
+			return "SOURCE_FILTER_TYPE_EXCL_EXTENSION";
+		}
+
+		case SOURCE_FILTER_TYPE_LIST_EXCL_EXTENSION:
+		{
+			return "SOURCE_FILTER_TYPE_LIST_EXCL_EXTENSION";
+		}
 	}
 
 	/* that's a bug, the lack of a default branch above should prevent it */
@@ -111,6 +121,16 @@ filterTypeComplement(SourceFilterType type)
 		case SOURCE_FILTER_TYPE_LIST_EXCL_INDEX:
 		{
 			return SOURCE_FILTER_TYPE_EXCL_INDEX;
+		}
+
+		case SOURCE_FILTER_TYPE_EXCL_EXTENSION:
+		{
+			return SOURCE_FILTER_TYPE_LIST_EXCL_EXTENSION;
+		}
+
+		case SOURCE_FILTER_TYPE_LIST_EXCL_EXTENSION:
+		{
+			return SOURCE_FILTER_TYPE_EXCL_EXTENSION;
 		}
 
 		default:
@@ -172,6 +192,8 @@ parse_filters(const char *filename, SourceFilters *filters)
 			SOURCE_FILTER_INCLUDE_ONLY_TABLE,
 			&(filters->includeOnlyTableList)
 		},
+		{ "exclude-extension", SOURCE_FILTER_EXCLUDE_EXTENSION, NULL },
+		{ "include-only-extension", SOURCE_FILTER_INCLUDE_ONLY_EXTENSION, NULL },
 		{ "", SOURCE_FILTER_UNKNOWN, NULL },
 	};
 
@@ -304,6 +326,62 @@ parse_filters(const char *filename, SourceFilters *filters)
 				break;
 			}
 
+			case SOURCE_FILTER_INCLUDE_ONLY_EXTENSION:
+			{
+				filters->includeOnlyExtensionList.count = optionCount;
+				filters->includeOnlyExtensionList.array =
+					(SourceFilterExtension *) calloc(optionCount,
+													 sizeof(SourceFilterExtension));
+
+				if (filters->includeOnlyExtensionList.array == NULL)
+				{
+					log_error(ALLOCATION_FAILED_ERROR);
+					return false;
+				}
+
+				for (int o = 0; o < optionCount; o++)
+				{
+					SourceFilterExtension *extension =
+						&(filters->includeOnlyExtensionList.array[o]);
+
+					const char *optionName =
+						ini_property_name(ini, sectionIndex, o);
+
+					strlcpy(extension->extname, optionName, sizeof(extension->extname));
+
+					log_debug("including only extension \"%s\"", extension->extname);
+				}
+				break;
+			}
+
+			case SOURCE_FILTER_EXCLUDE_EXTENSION:
+			{
+				filters->excludeExtensionList.count = optionCount;
+				filters->excludeExtensionList.array =
+					(SourceFilterExtension *) calloc(optionCount,
+													 sizeof(SourceFilterExtension));
+
+				if (filters->excludeExtensionList.array == NULL)
+				{
+					log_error(ALLOCATION_FAILED_ERROR);
+					return false;
+				}
+
+				for (int o = 0; o < optionCount; o++)
+				{
+					SourceFilterExtension *extension =
+						&(filters->excludeExtensionList.array[o]);
+
+					const char *optionName =
+						ini_property_name(ini, sectionIndex, o);
+
+					strlcpy(extension->extname, optionName, sizeof(extension->extname));
+
+					log_debug("excluding extension \"%s\"", extension->extname);
+				}
+				break;
+			}
+
 			default:
 			{
 				log_error("BUG: unknown section number %d", i);
@@ -370,6 +448,20 @@ parse_filters(const char *filename, SourceFilters *filters)
 				 "exclude-schema");
 	}
 
+	if (filters->includeOnlyExtensionList.count > 0 &&
+		filters->excludeExtensionList.count > 0)
+	{
+		log_error("Filtering setup in \"%s\" contains %d entries "
+				  "in section \"%s\" and %d entries in section \"%s\", "
+				  "please use only one of these sections.",
+				  filename,
+				  filters->includeOnlyExtensionList.count,
+				  "include-only-extension",
+				  filters->excludeExtensionList.count,
+				  "exclude-extension");
+		return false;
+	}
+
 	/*
 	 * Now assign a proper type to the source filter.
 	 */
@@ -386,7 +478,9 @@ parse_filters(const char *filename, SourceFilters *filters)
 	else if (filters->includeOnlySchemaList.count > 0 ||
 			 filters->excludeSchemaList.count > 0 ||
 			 filters->excludeTableList.count > 0 ||
-			 filters->excludeTableDataList.count > 0)
+			 filters->excludeTableDataList.count > 0 ||
+			 filters->excludeExtensionList.count > 0 ||
+			 filters->includeOnlyExtensionList.count > 0)
 	{
 		filters->type = SOURCE_FILTER_TYPE_EXCL;
 	}
@@ -548,6 +642,38 @@ filters_as_json(SourceFilters *filters, JSON_Value *jsFilter)
 		json_object_set_value(jsFilterObj, "exclude-schema", jsSchema);
 	}
 
+	/* include-only-extension */
+	if (filters->includeOnlyExtensionList.count > 0)
+	{
+		JSON_Value *jsExt = json_value_init_array();
+		JSON_Array *jsExtArray = json_value_get_array(jsExt);
+
+		for (int i = 0; i < filters->includeOnlyExtensionList.count; i++)
+		{
+			char *extname = filters->includeOnlyExtensionList.array[i].extname;
+
+			json_array_append_string(jsExtArray, extname);
+		}
+
+		json_object_set_value(jsFilterObj, "include-only-extension", jsExt);
+	}
+
+	/* exclude-extension */
+	if (filters->excludeExtensionList.count > 0)
+	{
+		JSON_Value *jsExt = json_value_init_array();
+		JSON_Array *jsExtArray = json_value_get_array(jsExt);
+
+		for (int i = 0; i < filters->excludeExtensionList.count; i++)
+		{
+			char *extname = filters->excludeExtensionList.array[i].extname;
+
+			json_array_append_string(jsExtArray, extname);
+		}
+
+		json_object_set_value(jsFilterObj, "exclude-extension", jsExt);
+	}
+
 	/* exclude table lists */
 	struct section
 	{
@@ -589,6 +715,305 @@ filters_as_json(SourceFilters *filters, JSON_Value *jsFilter)
 			json_object_set_value(jsFilterObj, sectionName, jsList);
 		}
 	}
+
+	return true;
+}
+
+
+/*
+ * filters_from_json parses a JSON representation of filters and populates a
+ * SourceFilters structure. This is the inverse of filters_as_json().
+ */
+bool
+filters_from_json(const char *jsonString, SourceFilters *filters)
+{
+	if (jsonString == NULL || filters == NULL)
+	{
+		log_error("BUG: filters_from_json called with NULL argument");
+		return false;
+	}
+
+	/* Initialize filters to empty state */
+	filters->prepared = false;
+	filters->type = SOURCE_FILTER_TYPE_NONE;
+	filters->includeOnlySchemaList.count = 0;
+	filters->includeOnlySchemaList.array = NULL;
+	filters->excludeSchemaList.count = 0;
+	filters->excludeSchemaList.array = NULL;
+	filters->includeOnlyTableList.count = 0;
+	filters->includeOnlyTableList.array = NULL;
+	filters->excludeTableList.count = 0;
+	filters->excludeTableList.array = NULL;
+	filters->excludeTableDataList.count = 0;
+	filters->excludeTableDataList.array = NULL;
+	filters->excludeIndexList.count = 0;
+	filters->excludeIndexList.array = NULL;
+	filters->includeOnlyExtensionList.count = 0;
+	filters->includeOnlyExtensionList.array = NULL;
+	filters->excludeExtensionList.count = 0;
+	filters->excludeExtensionList.array = NULL;
+
+	/* Parse JSON string */
+	JSON_Value *jsFilter = json_parse_string(jsonString);
+
+	if (jsFilter == NULL)
+	{
+		log_error("Failed to parse filters JSON: %s", jsonString);
+		return false;
+	}
+
+	JSON_Object *jsFilterObj = json_value_get_object(jsFilter);
+
+	if (jsFilterObj == NULL)
+	{
+		log_error("Filters JSON is not an object: %s", jsonString);
+		json_value_free(jsFilter);
+		return false;
+	}
+
+	/* Parse type field */
+	const char *typeStr = json_object_get_string(jsFilterObj, "type");
+
+	if (typeStr != NULL)
+	{
+		if (strcmp(typeStr, "SOURCE_FILTER_TYPE_NONE") == 0)
+		{
+			filters->type = SOURCE_FILTER_TYPE_NONE;
+		}
+		else if (strcmp(typeStr, "SOURCE_FILTER_TYPE_INCL") == 0)
+		{
+			filters->type = SOURCE_FILTER_TYPE_INCL;
+		}
+		else if (strcmp(typeStr, "SOURCE_FILTER_TYPE_EXCL") == 0)
+		{
+			filters->type = SOURCE_FILTER_TYPE_EXCL;
+		}
+		else if (strcmp(typeStr, "SOURCE_FILTER_TYPE_LIST_NOT_INCL") == 0)
+		{
+			filters->type = SOURCE_FILTER_TYPE_LIST_NOT_INCL;
+		}
+		else if (strcmp(typeStr, "SOURCE_FILTER_LIST_EXCL") == 0)
+		{
+			filters->type = SOURCE_FILTER_TYPE_LIST_EXCL;
+		}
+		else if (strcmp(typeStr, "SOURCE_FILTER_TYPE_EXCL_INDEX") == 0)
+		{
+			filters->type = SOURCE_FILTER_TYPE_EXCL_INDEX;
+		}
+		else if (strcmp(typeStr, "SOURCE_FILTER_TYPE_LIST_EXCL_INDEX") == 0)
+		{
+			filters->type = SOURCE_FILTER_TYPE_LIST_EXCL_INDEX;
+		}
+		else
+		{
+			log_warn("Unknown filter type in JSON: %s", typeStr);
+		}
+	}
+
+	/* Parse include-only-schema array */
+	JSON_Array *includeSchemaArray =
+		json_object_get_array(jsFilterObj, "include-only-schema");
+
+	if (includeSchemaArray != NULL)
+	{
+		size_t count = json_array_get_count(includeSchemaArray);
+		filters->includeOnlySchemaList.count = count;
+
+		if (count > 0)
+		{
+			filters->includeOnlySchemaList.array =
+				(SourceFilterSchema *) calloc(count, sizeof(SourceFilterSchema));
+
+			if (filters->includeOnlySchemaList.array == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				json_value_free(jsFilter);
+				return false;
+			}
+
+			for (size_t i = 0; i < count; i++)
+			{
+				const char *nspname = json_array_get_string(includeSchemaArray, i);
+
+				if (nspname != NULL)
+				{
+					strlcpy(filters->includeOnlySchemaList.array[i].nspname,
+							nspname,
+							PG_NAMEDATALEN);
+				}
+			}
+		}
+	}
+
+	/* Parse exclude-schema array */
+	JSON_Array *excludeSchemaArray =
+		json_object_get_array(jsFilterObj, "exclude-schema");
+
+	if (excludeSchemaArray != NULL)
+	{
+		size_t count = json_array_get_count(excludeSchemaArray);
+		filters->excludeSchemaList.count = count;
+
+		if (count > 0)
+		{
+			filters->excludeSchemaList.array =
+				(SourceFilterSchema *) calloc(count, sizeof(SourceFilterSchema));
+
+			if (filters->excludeSchemaList.array == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				json_value_free(jsFilter);
+				return false;
+			}
+
+			for (size_t i = 0; i < count; i++)
+			{
+				const char *nspname = json_array_get_string(excludeSchemaArray, i);
+
+				if (nspname != NULL)
+				{
+					strlcpy(filters->excludeSchemaList.array[i].nspname,
+							nspname,
+							PG_NAMEDATALEN);
+				}
+			}
+		}
+	}
+
+	/* Parse include-only-extension array */
+	JSON_Array *includeExtArray =
+		json_object_get_array(jsFilterObj, "include-only-extension");
+
+	if (includeExtArray != NULL)
+	{
+		size_t count = json_array_get_count(includeExtArray);
+		filters->includeOnlyExtensionList.count = count;
+
+		if (count > 0)
+		{
+			filters->includeOnlyExtensionList.array =
+				(SourceFilterExtension *) calloc(count, sizeof(SourceFilterExtension));
+
+			if (filters->includeOnlyExtensionList.array == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				json_value_free(jsFilter);
+				return false;
+			}
+
+			for (size_t i = 0; i < count; i++)
+			{
+				const char *extname = json_array_get_string(includeExtArray, i);
+
+				if (extname != NULL)
+				{
+					strlcpy(filters->includeOnlyExtensionList.array[i].extname,
+							extname,
+							PG_NAMEDATALEN);
+				}
+			}
+		}
+	}
+
+	/* Parse exclude-extension array */
+	JSON_Array *excludeExtArray =
+		json_object_get_array(jsFilterObj, "exclude-extension");
+
+	if (excludeExtArray != NULL)
+	{
+		size_t count = json_array_get_count(excludeExtArray);
+		filters->excludeExtensionList.count = count;
+
+		if (count > 0)
+		{
+			filters->excludeExtensionList.array =
+				(SourceFilterExtension *) calloc(count, sizeof(SourceFilterExtension));
+
+			if (filters->excludeExtensionList.array == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				json_value_free(jsFilter);
+				return false;
+			}
+
+			for (size_t i = 0; i < count; i++)
+			{
+				const char *extname = json_array_get_string(excludeExtArray, i);
+
+				if (extname != NULL)
+				{
+					strlcpy(filters->excludeExtensionList.array[i].extname,
+							extname,
+							PG_NAMEDATALEN);
+				}
+			}
+		}
+	}
+
+	/* Parse table lists (exclude-table, exclude-table-data, etc.) */
+	struct section
+	{
+		const char *name;
+		SourceFilterTableList *list;
+	};
+
+	struct section sections[] = {
+		{ "exclude-table", &(filters->excludeTableList) },
+		{ "exclude-table-data", &(filters->excludeTableDataList) },
+		{ "exclude-index", &(filters->excludeIndexList) },
+		{ "include-only-table", &(filters->includeOnlyTableList) },
+		{ NULL, NULL },
+	};
+
+	for (int i = 0; sections[i].name != NULL; i++)
+	{
+		const char *sectionName = sections[i].name;
+		SourceFilterTableList *list = sections[i].list;
+
+		JSON_Array *tableArray = json_object_get_array(jsFilterObj, sectionName);
+
+		if (tableArray != NULL)
+		{
+			size_t count = json_array_get_count(tableArray);
+			list->count = count;
+
+			if (count > 0)
+			{
+				list->array =
+					(SourceFilterTable *) calloc(count, sizeof(SourceFilterTable));
+
+				if (list->array == NULL)
+				{
+					log_error(ALLOCATION_FAILED_ERROR);
+					json_value_free(jsFilter);
+					return false;
+				}
+
+				for (size_t j = 0; j < count; j++)
+				{
+					JSON_Object *tableObj = json_array_get_object(tableArray, j);
+
+					if (tableObj != NULL)
+					{
+						const char *schema = json_object_get_string(tableObj, "schema");
+						const char *name = json_object_get_string(tableObj, "name");
+
+						if (schema != NULL)
+						{
+							strlcpy(list->array[j].nspname, schema, PG_NAMEDATALEN);
+						}
+
+						if (name != NULL)
+						{
+							strlcpy(list->array[j].relname, name, PG_NAMEDATALEN);
+						}
+					}
+				}
+			}
+		}
+	}
+
+	json_value_free(jsFilter);
 
 	return true;
 }

@@ -1,0 +1,6 @@
+---
+--- pgcopydb test/exclude-extension/setup-target.sql
+---
+--- This file is intentionally empty as the target database
+--- should be empty before the pgcopydb run.
+---

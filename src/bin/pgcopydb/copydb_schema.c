@@ -1223,7 +1223,8 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 			if (!catalog_prepare_filter(filtersDB,
 										specs->skipExtensions,
 										specs->skipCollations,
-										specs->skipPublications))
+										specs->skipPublications,
+										&(specs->filters)))
 			{
 				log_error("Failed to prepare filtering hash-table, "
 						  "see above for details");
@@ -1360,6 +1361,22 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 
 		(void) catalog_start_timing(&timing);
 
+		/*
+		 * Ensure the filter database is opened before calling
+		 * schema_list_pg_depend(), which needs to insert dependency
+		 * rows into the s_depend table.
+		 */
+		if (filtersDB->db == NULL)
+		{
+			if (!catalog_open(filtersDB))
+			{
+				log_error("Failed to open filter database for dependency tracking");
+				filters->type = type;
+				(void) semaphore_unlock(&(filtersDB->sema));
+				return false;
+			}
+		}
+
 		if (!schema_list_pg_depend(pgsql, filters, filtersDB))
 		{
 			/* errors have already been logged */
@@ -1405,7 +1422,8 @@ copydb_fetch_filtered_oids(CopyDataSpec *specs, PGSQL *pgsql)
 		if (!catalog_prepare_filter(filtersDB,
 									specs->skipExtensions,
 									specs->skipCollations,
-									specs->skipPublications))
+									specs->skipPublications,
+									&(specs->filters)))
 		{
 			log_error("Failed to prepare filtering hash-table, "
 					  "see above for details");
