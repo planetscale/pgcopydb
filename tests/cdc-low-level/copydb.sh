@@ -2,6 +2,9 @@
 
 set -x
 set -e
+
+# Disable pager for psql to avoid hanging in non-interactive environments
+export PAGER=cat
 set -o pipefail
 
 # This script expects the following environment variables to be set:

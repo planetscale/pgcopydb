@@ -19,6 +19,8 @@ jobs:
       matrix:
         PGVERSION:
           - 16
+          - 17
+          - 18
         TEST:
           - ci
           - pagila
@@ -49,6 +51,10 @@ jobs:
       - name: Set environment variables
         run: |
             echo "TEST=${{ matrix.TEST }}" >> $GITHUB_ENV
+            echo "PGVERSION=${{ matrix.PGVERSION }}" >> $GITHUB_ENV
+
+      - name: Build pgcopydb Docker image
+        run: make build
 
       - name: Create docker volumes
         run: |

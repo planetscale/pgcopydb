@@ -1,7 +1,13 @@
 # Copyright (c) 2021 The PostgreSQL Global Development Group.
 # Licensed under the PostgreSQL License.
 
-PGVERSION ?= 16
+PGVERSION ?= 17
+export PGVERSION
+
+# Auto-detect docker or podman
+DOCKER ?= $(shell command -v docker 2>/dev/null || command -v podman 2>/dev/null)
+export DOCKER
+
 BUILD_ARGS = --build-arg PGVERSION=$(PGVERSION)
 
 all: pagila pagila-multi-steps blobs unit filtering extensions \
@@ -58,7 +64,8 @@ timescaledb: build
 	$(MAKE) -C $@
 
 build:
-	docker build $(BUILD_ARGS) -t pagila -f Dockerfile.pagila .
+	cd .. && $(DOCKER) build $(BUILD_ARGS) -t pgcopydb:pg$(PGVERSION) -f Dockerfile .
+	$(DOCKER) build $(BUILD_ARGS) --build-arg PGCOPYDB_IMAGE=pgcopydb:pg$(PGVERSION) -t pagila -f Dockerfile.pagila .
 
 .PHONY: all build
 .PHONY: pagila pagila-multi-steps blobs unit filtering extensions

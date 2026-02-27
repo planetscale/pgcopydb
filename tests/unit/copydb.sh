@@ -3,6 +3,9 @@
 set -x
 set -e
 
+# Disable pager for psql to avoid hanging in non-interactive environments
+export PAGER=cat
+
 # This script expects the following environment variables to be set:
 #
 #  - PGCOPYDB_SOURCE_PGURI

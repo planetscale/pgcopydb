@@ -748,6 +748,13 @@ pg_restore_roles(PostgresPaths *pgPaths,
 			continue;
 		}
 
+		/* skip \restrict and \unrestrict metacommands (PostgreSQL 17.6+) */
+		if (strncmp(currentLine, "\\restrict", 9) == 0 ||
+			strncmp(currentLine, "\\unrestrict", 11) == 0)
+		{
+			continue;
+		}
+
 		char *createRole = "CREATE ROLE ";
 		int createRoleLen = strlen(createRole);
 
