@@ -732,6 +732,19 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 		log_notice("Skipping COMMENT ON EXTENSION \"%s\"", name);
 	}
 
+	/*
+	 * Skip PUBLICATION, PUBLICATION TABLE, and PUBLICATION TABLES IN SCHEMA
+	 * when --skip-publications has been used.
+	 */
+	if (specs->skipPublications &&
+		(item->desc == ARCHIVE_TAG_PUBLICATION ||
+		 item->desc == ARCHIVE_TAG_PUBLICATION_TABLE ||
+		 item->desc == ARCHIVE_TAG_PUBLICATION_TABLES_IN_SCHEMA))
+	{
+		skip = true;
+		log_notice("Skipping PUBLICATION \"%s\"", name);
+	}
+
 	if (!skip && catOid == PG_NAMESPACE_OID)
 	{
 		bool exists = false;

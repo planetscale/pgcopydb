@@ -7,6 +7,8 @@
      --target             Directory where to save the dump files
      --dir                Work directory to use
      --skip-extensions    Skip restoring extensions
+     --skip-collations    Skip restoring collations
+     --skip-publications  Skip restoring publications
      --filters <filename> Use the filters defined in <filename>
      --snapshot           Use snapshot obtained with pg_export_snapshot
    

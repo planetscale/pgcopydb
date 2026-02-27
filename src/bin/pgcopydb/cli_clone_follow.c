@@ -47,6 +47,7 @@
 	"  --skip-extensions             Skip restoring extensions\n" \
 	"  --skip-ext-comments           Skip restoring COMMENT ON EXTENSION\n" \
 	"  --skip-collations             Skip restoring collations\n" \
+	"  --skip-publications           Skip restoring publications\n" \
 	"  --skip-vacuum                 Skip running VACUUM ANALYZE\n" \
 	"  --skip-analyze                Skip running vacuumdb --analyze-only\n" \
 	"  --skip-db-properties          Skip copying ALTER DATABASE SET properties\n" \
