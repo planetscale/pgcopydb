@@ -31,6 +31,16 @@
 #include "string_utils.h"
 #include "summary.h"
 
+/*
+ * libpq's output buffer uses a signed int for its size, so it can only grow
+ * to ~1 GB before the doubling arithmetic overflows.  When the CDC apply
+ * pipelines many EXECUTE statements with large parameter values (e.g. rows
+ * containing 300 MB email bodies), the accumulated data can exceed that
+ * limit.  We force a pipeline sync at transaction boundaries once the
+ * estimated parameter data reaches this threshold.
+ */
+#define PIPELINE_BYTES_SYNC_THRESHOLD (512ULL * 1024 * 1024)
+
 GUC applySettingsSync[] = {
 	COMMON_GUC_SETTINGS,
 	{ "synchronous_commit", "on" },
@@ -537,17 +547,37 @@ stream_apply_file(StreamApplyContext *context)
 		}
 
 
-		/* rate limit to 1 pipeline sync per second */
-		if ((metadata->action == STREAM_ACTION_COMMIT ||
-			 metadata->action == STREAM_ACTION_KEEPALIVE) &&
-			(1 < (time(NULL) - context->applyPgConn.pipelineSyncTime)))
+		/*
+		 * Sync the pipeline at transaction boundaries (COMMIT or
+		 * KEEPALIVE) when either the 1-second timer has elapsed or
+		 * when accumulated parameter data approaches libpq's output
+		 * buffer limit.
+		 *
+		 * libpq's output buffer size is tracked with a signed int,
+		 * so the buffer can grow to ~1 GB before the doubling logic
+		 * overflows.  We sync well before that at 512 MB to leave
+		 * headroom for wire-protocol framing and PREPARE overhead.
+		 */
+		if (metadata->action == STREAM_ACTION_COMMIT ||
+			metadata->action == STREAM_ACTION_KEEPALIVE)
 		{
-			/* fetch results until done */
-			if (!pgsql_sync_pipeline(&(context->applyPgConn)))
+			bool timeToSync =
+				1 < (time(NULL) - context->applyPgConn.pipelineSyncTime);
+
+			bool bufferNearFull =
+				context->pipelineBytes >= PIPELINE_BYTES_SYNC_THRESHOLD;
+
+			if (timeToSync || bufferNearFull)
 			{
-				log_error("Failed to sync the pipeline, see previous error for "
-						  "details");
-				return false;
+				/* fetch results until done */
+				if (!pgsql_sync_pipeline(&(context->applyPgConn)))
+				{
+					log_error("Failed to sync the pipeline, "
+							  "see previous error for details");
+					return false;
+				}
+
+				context->pipelineBytes = 0;
 			}
 		}
 	}
@@ -559,6 +589,7 @@ stream_apply_file(StreamApplyContext *context)
 				  "details");
 		return false;
 	}
+	context->pipelineBytes = 0;
 
 	/*
 	 * Each time we are done applying a file, we update our progress and
@@ -747,6 +778,25 @@ stream_apply_sql(StreamApplyContext *context,
 				return false;
 			}
 
+			/* Clean up prepared statements (see COMMIT for explanation) */
+			if (context->preparedStmt != NULL)
+			{
+				if (!pgsql_execute(applyPgConn, "DEALLOCATE ALL"))
+				{
+					log_warn("Failed to deallocate prepared statements");
+				}
+
+				PreparedStmt *current, *tmp;
+
+				HASH_ITER(hh, context->preparedStmt, current, tmp)
+				{
+					HASH_DEL(context->preparedStmt, current);
+					free(current);
+				}
+
+				context->preparedStmt = NULL;
+			}
+
 			/* Reset the transactionInProgress after abort */
 			context->transactionInProgress = false;
 
@@ -837,6 +887,34 @@ stream_apply_sql(StreamApplyContext *context,
 			{
 				/* errors have already been logged */
 				return false;
+			}
+
+			/*
+			 * Deallocate all prepared statements on the server and clear
+			 * the client-side hash table. Prepared statement names are
+			 * 32-bit hashes of the SQL text, so hash collisions are
+			 * possible when many unique statements accumulate across
+			 * transactions (birthday paradox). Clearing at COMMIT
+			 * prevents a new PREPARE from being silently skipped when
+			 * its hash collides with a previously prepared statement
+			 * that has a different parameter count.
+			 */
+			if (context->preparedStmt != NULL)
+			{
+				if (!pgsql_execute(applyPgConn, "DEALLOCATE ALL"))
+				{
+					log_warn("Failed to deallocate prepared statements");
+				}
+
+				PreparedStmt *current, *tmp;
+
+				HASH_ITER(hh, context->preparedStmt, current, tmp)
+				{
+					HASH_DEL(context->preparedStmt, current);
+					free(current);
+				}
+
+				context->preparedStmt = NULL;
 			}
 
 			context->transactionInProgress = false;
@@ -1181,6 +1259,40 @@ stream_apply_sql(StreamApplyContext *context,
 				{
 					/* errors have already been logged */
 					return false;
+				}
+
+				/*
+				 * Track accumulated parameter bytes in the pipeline.
+				 * libpq output buffer uses int (~1 GB effective max
+				 * due to doubling), force sync before overflow.
+				 */
+				for (int j = 0; j < count; j++)
+				{
+					if (paramValues[j] != NULL)
+					{
+						context->pipelineBytes += strlen(paramValues[j]);
+					}
+				}
+
+				/*
+				 * When a single transaction contains many large rows
+				 * (e.g. 330 MB email bodies), the pipeline buffer can
+				 * exceed libpq's ~1 GB limit before reaching COMMIT.
+				 * Sync mid-transaction to drain the buffer.  This is
+				 * safe: we use explicit BEGIN/COMMIT, so a pipeline
+				 * sync only flushes pending results without affecting
+				 * the transaction.
+				 */
+				if (context->pipelineBytes >= PIPELINE_BYTES_SYNC_THRESHOLD)
+				{
+					if (!pgsql_sync_pipeline(applyPgConn))
+					{
+						log_error("Failed to sync the pipeline, "
+								  "see previous error for details");
+						return false;
+					}
+
+					context->pipelineBytes = 0;
 				}
 			}
 

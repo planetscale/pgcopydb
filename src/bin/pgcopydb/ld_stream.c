@@ -49,6 +49,7 @@ stream_init_specs(StreamSpecs *specs,
 				  uint64_t endpos,
 				  LogicalStreamMode mode,
 				  DatabaseCatalog *sourceDB,
+				  SourceFilters *filters,
 				  bool stdin,
 				  bool stdout,
 				  bool logSQL)
@@ -61,6 +62,7 @@ stream_init_specs(StreamSpecs *specs,
 
 	specs->paths = *paths;
 	specs->endpos = endpos;
+	specs->filters = filters;
 
 	/*
 	 * Open the specified sourceDB catalog.
@@ -102,7 +104,7 @@ stream_init_specs(StreamSpecs *specs,
 		{
 			KeyVal options = {
 				/* we ignore the last keyword and value if the option is not set */
-				.count = specs->slot.wal2jsonNumericAsString ? 7 : 6,
+				.count = specs->slot.wal2jsonNumericAsString ? 8 : 7,
 				.keywords = {
 					"format-version",
 					"include-xids",
@@ -110,6 +112,7 @@ stream_init_specs(StreamSpecs *specs,
 					"include-transaction",
 					"include-types",
 					"filter-tables",
+					"add-msg-prefixes",
 					"numeric-data-types-as-string"
 				},
 				.values = {
@@ -119,6 +122,7 @@ stream_init_specs(StreamSpecs *specs,
 					"true",
 					"true",
 					"pgcopydb.*",
+					"pgcopydb",
 					"true"
 				}
 			};

@@ -11,6 +11,7 @@
 #include "parson.h"
 
 #include "copydb.h"
+#include "filtering.h"
 #include "queue_utils.h"
 #include "pgsql.h"
 #include "schema.h"
@@ -332,6 +333,19 @@ typedef struct GeneratedColumnsCache
 
 
 /*
+ * Simple hash table to track materialized views by (nspname, relname).
+ * Used during CDC transform to skip DML targeting matviews.
+ */
+typedef struct MatViewCache
+{
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
+
+	UT_hash_handle hh;
+} MatViewCache;
+
+
+/*
  * StreamContext allows tracking the progress of the ld_stream module and is
  * shared also with the ld_transform module, which has its own instance of a
  * StreamContext to track its own progress.
@@ -368,6 +382,12 @@ typedef struct StreamContext
 	/* hash table acts as a cache for tables with generated columns */
 	GeneratedColumnsCache *generatedColumnsCache;
 
+	/* hash table cache for materialized views (skip DML during CDC) */
+	MatViewCache *matViewCache;
+
+	/* table filtering configuration */
+	SourceFilters *filters;
+
 	Queue *transformQueue;
 	PGSQL *transformPGSQL;
 
@@ -395,6 +415,9 @@ typedef struct PreparedStmt
 {
 	uint32_t hash;
 	bool prepared;
+	bool filterOut;
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
 
 	UT_hash_handle hh;          /* makes this structure hashable */
 } PreparedStmt;
@@ -457,6 +480,10 @@ typedef struct StreamApplyContext
 	char sqlFileName[MAXPGPATH];
 
 	PreparedStmt *preparedStmt;
+
+	SourceFilters *filters;     /* table filtering configuration */
+
+	uint64_t pipelineBytes;     /* accumulated bytes in pipeline buffer */
 } StreamApplyContext;
 
 
@@ -522,6 +549,9 @@ struct StreamSpecs
 	/* transform needs some catalog lookups (pkey, type oid) */
 	DatabaseCatalog *sourceDB;
 
+	/* table filtering configuration */
+	SourceFilters *filters;
+
 	/* receive push json filenames to a queue for transform */
 	Queue transformQueue;
 	PGSQL transformPGSQL;
@@ -550,6 +580,7 @@ bool stream_init_specs(StreamSpecs *specs,
 					   uint64_t endpos,
 					   LogicalStreamMode mode,
 					   DatabaseCatalog *sourceDB,
+					   SourceFilters *filters,
 					   bool stdIn,
 					   bool stdOut,
 					   bool logSQL);
@@ -724,13 +755,15 @@ bool stream_apply_init_context(StreamApplyContext *context,
 							   CDCPaths *paths,
 							   ConnStrings *connStrings,
 							   char *origin,
-							   uint64_t endpos);
+							   uint64_t endpos,
+							   SourceFilters *filters);
 
 bool setupReplicationOrigin(StreamApplyContext *context);
 
 bool computeSQLFileName(StreamApplyContext *context);
 
-bool parseSQLAction(const char *query, LogicalMessageMetadata *metadata);
+bool parseSQLAction(const char *query, LogicalMessageMetadata *metadata,
+					SourceFilters *filters);
 
 bool stream_apply_find_durable_lsn(StreamApplyContext *context,
 								   uint64_t *durableLSN);
