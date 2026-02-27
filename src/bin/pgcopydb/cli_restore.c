@@ -68,6 +68,8 @@ static CommandLine restore_schema_pre_data_command =
 		"  --no-tablespaces     Do not output commands to select tablespaces\n"
 		"  --skip-extensions    Skip restoring extensions\n" \
 		"  --skip-ext-comments  Skip restoring COMMENT ON EXTENSION\n" \
+		"  --skip-collations    Skip restoring collations\n" \
+		"  --skip-publications  Skip restoring publications\n" \
 		"  --filters <filename> Use the filters defined in <filename>\n"
 		"  --restart            Allow restarting when temp files exist already\n"
 		"  --resume             Allow resuming operations after a failure\n"
@@ -90,6 +92,8 @@ static CommandLine restore_schema_post_data_command =
 		"  --no-tablespaces     Do not output commands to select tablespaces\n"
 		"  --skip-extensions    Skip restoring extensions\n" \
 		"  --skip-ext-comments  Skip restoring COMMENT ON EXTENSION\n" \
+		"  --skip-collations    Skip restoring collations\n" \
+		"  --skip-publications  Skip restoring publications\n" \
 		"  --filters <filename> Use the filters defined in <filename>\n"
 		"  --restart            Allow restarting when temp files exist already\n"
 		"  --resume             Allow resuming operations after a failure\n"
@@ -166,6 +170,8 @@ cli_restore_schema_getopts(int argc, char **argv)
 		{ "skip-extensions", no_argument, NULL, 'e' },
 		{ "skip-ext-comment", no_argument, NULL, 'E' },
 		{ "skip-ext-comments", no_argument, NULL, 'E' },
+		{ "skip-collations", no_argument, NULL, 'l' },
+		{ "skip-publications", no_argument, NULL, 'G' },
 		{ "restart", no_argument, NULL, 'r' },
 		{ "resume", no_argument, NULL, 'R' },
 		{ "not-consistent", no_argument, NULL, 'C' },
@@ -189,7 +195,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:D:cOXj:xF:eErRCN:Vvdzqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:cOXj:xF:eElGrRCN:Vvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -279,6 +285,20 @@ cli_restore_schema_getopts(int argc, char **argv)
 			{
 				options.skipCommentOnExtension = true;
 				log_trace("--skip-extensions");
+				break;
+			}
+
+			case 'l':
+			{
+				options.skipCollations = true;
+				log_trace("--skip-collations");
+				break;
+			}
+
+			case 'G':
+			{
+				options.skipPublications = true;
+				log_trace("--skip-publications");
 				break;
 			}
 

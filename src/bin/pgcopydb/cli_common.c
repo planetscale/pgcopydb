@@ -613,6 +613,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "skip-ext-comment", no_argument, NULL, 'M' },
 		{ "skip-ext-comments", no_argument, NULL, 'M' },
 		{ "skip-collations", no_argument, NULL, 'l' },
+		{ "skip-publications", no_argument, NULL, 'G' },
 		{ "skip-vacuum", no_argument, NULL, 'U' },
 		{ "skip-analyze", no_argument, NULL, 'a' },
 		{ "skip-db-properties", no_argument, NULL, 'g' },
@@ -654,7 +655,7 @@ cli_copy_db_getopts(int argc, char **argv)
 	}
 
 	const char *optstring =
-		"S:T:D:J:I:b:L:u:mcAPOXj:xBeMlUagkynF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh";
+		"S:T:D:J:I:b:L:u:mcAPOXj:xBeMlGUagkynF:F:Q:irRCN:fp:ws:o:tE:Vvdzqh";
 
 	while ((c = getopt_long(argc, argv,
 							optstring, long_options, &option_index)) != -1)
@@ -846,6 +847,13 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.skipCommentOnExtension = true;
 				log_trace("--skip-extensions");
+				break;
+			}
+
+			case 'G':
+			{
+				options.skipPublications = true;
+				log_trace("--skip-publications");
 				break;
 			}
 

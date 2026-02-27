@@ -37,6 +37,8 @@ static CommandLine dump_schema_command =
 		"  --target             Directory where to save the dump files\n"
 		"  --dir                Work directory to use\n"
 		"  --skip-extensions    Skip restoring extensions\n" \
+		"  --skip-collations    Skip restoring collations\n" \
+		"  --skip-publications  Skip restoring publications\n" \
 		"  --filters <filename> Use the filters defined in <filename>\n"
 		"  --snapshot           Use snapshot obtained with pg_export_snapshot\n",
 		cli_dump_schema_getopts,
@@ -84,6 +86,8 @@ cli_dump_schema_getopts(int argc, char **argv)
 		{ "restart", no_argument, NULL, 'r' },
 		{ "resume", no_argument, NULL, 'R' },
 		{ "skip-extensions", no_argument, NULL, 'e' },
+		{ "skip-collations", no_argument, NULL, 'l' },
+		{ "skip-publications", no_argument, NULL, 'G' },
 		{ "not-consistent", no_argument, NULL, 'C' },
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
@@ -107,7 +111,7 @@ cli_dump_schema_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:T:D:PrReFCNVvdzqh",
+	while ((c = getopt_long(argc, argv, "S:T:D:PrRelGCNVvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -184,6 +188,20 @@ cli_dump_schema_getopts(int argc, char **argv)
 			{
 				options.skipExtensions = true;
 				log_trace("--skip-extensions");
+				break;
+			}
+
+			case 'l':
+			{
+				options.skipCollations = true;
+				log_trace("--skip-collations");
+				break;
+			}
+
+			case 'G':
+			{
+				options.skipPublications = true;
+				log_trace("--skip-publications");
 				break;
 			}
 

@@ -5730,7 +5730,8 @@ catalog_iter_s_seq_finish(SourceSeqIterator *iter)
 bool
 catalog_prepare_filter(DatabaseCatalog *catalog,
 					   bool skipExtensions,
-					   bool skipCollations)
+					   bool skipCollations,
+					   bool skipPublications)
 {
 	sqlite3 *db = catalog->db;
 
@@ -5914,6 +5915,13 @@ catalog_prepare_filter(DatabaseCatalog *catalog,
 			return false;
 		}
 	}
+
+	/*
+	 * Note: --skip-publications is implemented in dump_restore.c by filtering
+	 * publications from the pg_restore list. We don't need to filter them
+	 * here in the catalog because publications are not fetched into the
+	 * internal catalog.
+	 */
 
 	return true;
 }
