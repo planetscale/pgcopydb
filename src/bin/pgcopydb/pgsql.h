@@ -252,6 +252,7 @@ void pgsql_set_retry_policy(ConnectionRetryPolicy *retryPolicy,
 							int maxSleepTime,
 							int baseSleepTime);
 void pgsql_set_interactive_retry_policy(ConnectionRetryPolicy *retryPolicy);
+void pgsql_set_copy_retry_policy(ConnectionRetryPolicy *retryPolicy);
 int pgsql_compute_connection_retry_sleep_time(ConnectionRetryPolicy *retryPolicy);
 bool pgsql_retry_policy_expired(ConnectionRetryPolicy *retryPolicy);
 

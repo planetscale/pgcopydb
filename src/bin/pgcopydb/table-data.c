@@ -1316,13 +1316,33 @@ copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 	CopyTableSummary *summary = &(tableSpecs->summary);
 	CopyStats stats = { 0 };
 
-	int attempts = 0;
-	int maxAttempts = 5;        /* allow 5 attempts total, 4 retries */
+	/*
+	 * Set longer retry policy on src/dst connections so that
+	 * pgsql_retry_open_connection() uses 5-min timeout with 30s sleep cap
+	 * instead of the default 60s/2s. This lets COPY workers survive source
+	 * outages (e.g. Supabase maintenance, IP lockouts) lasting minutes.
+	 */
+	pgsql_set_copy_retry_policy(&(src->retryPolicy));
+	pgsql_set_copy_retry_policy(&(dst->retryPolicy));
 
-	bool retry = true;
+	/*
+	 * Use a time-budgeted outer retry loop (30 min) instead of a fixed
+	 * attempt count. This pairs with the longer connection retry to let
+	 * COPY workers back off exponentially and keep trying for the full
+	 * outage window.
+	 */
+	ConnectionRetryPolicy outerRetry = { 0 };
+
+	(void) pgsql_set_retry_policy(&outerRetry,
+								  COPY_WORKER_RETRY_TIMEOUT,
+								  -1, /* unbounded attempts */
+								  COPY_WORKER_RETRY_CAP_SLEEP_TIME,
+								  COPY_WORKER_RETRY_BASE_SLEEP_TIME);
+
+	int attempts = 0;
 	bool success = false;
 
-	while (!success && retry)
+	while (!success)
 	{
 		++attempts;
 
@@ -1352,28 +1372,17 @@ copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 			break;
 		}
 
-		/* errors have already been logged */
-		retry =
-			attempts < maxAttempts &&
+		/* only retry on Connection Exception errors (SQLSTATE class 08) */
+		bool isConnectionError =
+			pgsql_state_is_connection_error(src) ||
+			pgsql_state_is_connection_error(dst);
 
-			/* retry only on Connection Exception errors */
-			(pgsql_state_is_connection_error(src) ||
-			 pgsql_state_is_connection_error(dst));
-
-		if (maxAttempts <= attempts)
+		if (!isConnectionError)
 		{
-			log_error("Failed to copy table %s even after %d attempts, "
+			log_error("Failed to copy table %s due to non-connection error, "
 					  "see above for details",
-					  tableSpecs->sourceTable->qname,
-					  attempts);
-		}
-		else if (retry)
-		{
-			log_info("Failed to copy table %s (connection exception), "
-					 "retrying in %dms (attempt %d)",
-					 tableSpecs->sourceTable->qname,
-					 POSTGRES_PING_RETRY_CAP_SLEEP_TIME,
-					 attempts);
+					  tableSpecs->sourceTable->qname);
+			break;
 		}
 
 		if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
@@ -1381,12 +1390,31 @@ copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 			break;
 		}
 
-		if (retry)
+		if (pgsql_retry_policy_expired(&outerRetry))
 		{
-			/* sleep a couple seconds then retry */
-			pg_usleep(POSTGRES_PING_RETRY_CAP_SLEEP_TIME * 1000);
+			log_error("Failed to copy table %s after %d attempts "
+					  "over %d minutes, giving up",
+					  tableSpecs->sourceTable->qname,
+					  attempts,
+					  COPY_WORKER_RETRY_TIMEOUT / 60);
+			break;
 		}
+
+		int sleepTimeMs =
+			pgsql_compute_connection_retry_sleep_time(&outerRetry);
+
+		log_warn("Failed to copy table %s (connection exception), "
+				 "retrying in %d ms (attempt %d)",
+				 tableSpecs->sourceTable->qname,
+				 sleepTimeMs,
+				 attempts);
+
+		pg_usleep(sleepTimeMs * 1000);
 	}
+
+	/* restore default retry policy on connections */
+	pgsql_set_interactive_retry_policy(&(src->retryPolicy));
+	pgsql_set_interactive_retry_policy(&(dst->retryPolicy));
 
 	/* publish bytesTransmitted accumulated value to the summary */
 	summary->bytesTransmitted = stats.bytesTransmitted;

@@ -85,6 +85,16 @@
 #define POSTGRES_PING_RETRY_CAP_SLEEP_TIME (2 * 1000) /* milliseconds */
 #define POSTGRES_PING_RETRY_BASE_SLEEP_TIME 5         /* milliseconds */
 
+/* COPY worker connection retry: 5 min per reconnect attempt, 30s cap between pings */
+#define COPY_WORKER_PING_RETRY_TIMEOUT 300                /* seconds */
+#define COPY_WORKER_PING_RETRY_CAP_SLEEP_TIME (30 * 1000) /* milliseconds */
+#define COPY_WORKER_PING_RETRY_BASE_SLEEP_TIME 500        /* milliseconds */
+
+/* COPY worker outer retry: 30 min total budget, 5 min cap between COPY attempts */
+#define COPY_WORKER_RETRY_TIMEOUT (30 * 60)               /* seconds */
+#define COPY_WORKER_RETRY_CAP_SLEEP_TIME (5 * 60 * 1000)  /* milliseconds */
+#define COPY_WORKER_RETRY_BASE_SLEEP_TIME (2 * 1000)      /* milliseconds */
+
 #define POSTGRES_PORT 5432
 
 /* default replication slot and origin for logical replication */

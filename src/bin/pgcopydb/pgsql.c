@@ -235,6 +235,22 @@ pgsql_set_interactive_retry_policy(ConnectionRetryPolicy *retryPolicy)
 }
 
 
+/*
+ * pgsql_set_copy_retry_policy sets the retry policy for COPY worker
+ * connections: 5-minute timeout, 30s sleep cap, 500ms base. This gives
+ * COPY workers a much longer window to reconnect after source outages.
+ */
+void
+pgsql_set_copy_retry_policy(ConnectionRetryPolicy *retryPolicy)
+{
+	(void) pgsql_set_retry_policy(retryPolicy,
+								  COPY_WORKER_PING_RETRY_TIMEOUT,
+								  -1, /* unbounded number of attempts */
+								  COPY_WORKER_PING_RETRY_CAP_SLEEP_TIME,
+								  COPY_WORKER_PING_RETRY_BASE_SLEEP_TIME);
+}
+
+
 #define min(a, b) (a < b ? a : b)
 
 /*
