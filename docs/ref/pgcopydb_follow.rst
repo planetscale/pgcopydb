@@ -329,6 +329,44 @@ __ https://www.postgresql.org/docs/current/monitoring-stats.html#MONITORING-PG-S
 
     __ https://www.postgresql.org/docs/current/monitoring-stats.html#MONITORING-PG-STAT-REPLICATION-VIEW
 
+Generic Messages from Other CDC Tools
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+pgcopydb automatically filters out generic messages sent via PostgreSQL's
+``pg_logical_emit_message()`` function. These messages are typically
+heartbeats or monitoring signals from other CDC tools and do not
+represent actual data changes.
+
+**How Filtering Works:**
+
+When using the **wal2json** output plugin (default), pgcopydb configures the
+plugin to only include messages with prefix "pgcopydb". Since pgcopydb
+doesn't send any messages itself, this effectively filters out all messages
+from other tools at the protocol level.
+
+**Common filtered messages include:**
+
+- **PeerDB/PeerFlow**: ``peerdb_heartbeat`` messages sent every minute
+- **Debezium**: ``debezium.heartbeat`` messages for lag monitoring
+- **Custom CDC tools**: Application-specific messages
+
+**Note for test_decoding plugin:** The test_decoding plugin does not support
+message prefix filtering. If you use test_decoding and encounter messages
+from other tools, pgcopydb will skip them during the transform phase with
+a debug log message.
+
+.. note::
+
+   This filtering happens automatically. pgcopydb coexists with other logical
+   replication tools running on the same source database without configuration.
+
+.. note::
+
+   If you see "Skipping generic message" in debug logs, this indicates messages
+   that were not filtered at the protocol level (e.g., when using test_decoding
+   or from older JSON files). This is expected behavior and does not affect data
+   integrity or migration completeness.
+
 As the pgcopydb streaming processes maintain the sentinel table on the
 source database, it is also possible to use it to keep track of the logical
 replication progress.

@@ -193,6 +193,23 @@ bool catalog_lookup_s_matview_by_oid(DatabaseCatalog *catalog,
 									 uint32_t oid);
 bool catalog_s_matview_fetch(SQLiteQuery *query);
 
+typedef bool (CatalogMatViewIterFun)(void *context, CatalogMatView *matview);
+
+typedef struct CatalogMatViewIterator
+{
+	DatabaseCatalog *catalog;
+	CatalogMatView *matview;
+	SQLiteQuery query;
+} CatalogMatViewIterator;
+
+bool catalog_iter_s_matview(DatabaseCatalog *catalog,
+							void *context,
+							CatalogMatViewIterFun *callback);
+
+bool catalog_iter_s_matview_init(CatalogMatViewIterator *iter);
+bool catalog_iter_s_matview_next(CatalogMatViewIterator *iter);
+bool catalog_iter_s_matview_finish(CatalogMatViewIterator *iter);
+
 /*
  * Views
  */

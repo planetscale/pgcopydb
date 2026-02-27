@@ -861,6 +861,21 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 						 "see above for details",
 						 sourceDB->dbfile);
 				log_warn("Using previously configured filters");
+
+				/* Load the filters from the catalog into copySpecs */
+				log_info("Loading filters from catalog JSON: %s", setup->filters);
+
+				if (!filters_from_json(setup->filters, filters))
+				{
+					log_error("Failed to parse filters from catalog: %s",
+							  setup->filters);
+					return false;
+				}
+
+				log_info(
+					"Successfully loaded filters from catalog: type=%s, exclude-schema count=%d",
+					filterTypeToString(filters->type),
+					filters->excludeSchemaList.count);
 			}
 			else
 			{
@@ -873,6 +888,35 @@ catalog_register_setup_from_specs(CopyDataSpec *copySpecs)
 				return false;
 			}
 		}
+	}
+
+	/* Always ensure filters are loaded from catalog if they exist and current
+	 * command doesn't have filters. This handles cases where subsequent commands
+	 * (like stream catchup) reuse an already-initialized catalog.
+	 */
+	CatalogSetup *setup = &(sourceDB->setup);
+
+	log_debug("Post-mismatch check: setup->filters=%s, filters->type=%s",
+			  setup->filters ? setup->filters : "NULL",
+			  filterTypeToString(filters->type));
+
+	if (setup->filters != NULL &&
+		strstr(setup->filters, "SOURCE_FILTER_TYPE_NONE") == NULL &&
+		filters->type == SOURCE_FILTER_TYPE_NONE)
+	{
+		log_info("Loading filters from catalog for reused setup");
+
+		if (!filters_from_json(setup->filters, filters))
+		{
+			log_error("Failed to parse filters from catalog: %s",
+					  setup->filters);
+			json_free_serialized_string(json);
+			return false;
+		}
+
+		log_info("Loaded filters from catalog: type=%s, exclude-schema count=%d",
+				 filterTypeToString(filters->type),
+				 filters->excludeSchemaList.count);
 	}
 
 	json_free_serialized_string(json);
@@ -2155,6 +2199,153 @@ catalog_s_matview_fetch(SQLiteQuery *query)
 	}
 
 	entry->excludeData = sqlite3_column_int64(query->ppStmt, 4) == 1;
+
+	return true;
+}
+
+
+/*
+ * catalog_iter_s_matview iterates over all materialized views in our catalog.
+ */
+bool
+catalog_iter_s_matview(DatabaseCatalog *catalog,
+					   void *context,
+					   CatalogMatViewIterFun *callback)
+{
+	CatalogMatViewIterator *iter =
+		(CatalogMatViewIterator *) calloc(1, sizeof(CatalogMatViewIterator));
+
+	iter->catalog = catalog;
+
+	if (!catalog_iter_s_matview_init(iter))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	for (;;)
+	{
+		if (!catalog_iter_s_matview_next(iter))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		CatalogMatView *matview = iter->matview;
+
+		if (matview == NULL)
+		{
+			if (!catalog_iter_s_matview_finish(iter))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			break;
+		}
+
+		/* now call the provided callback */
+		if (!(*callback)(context, matview))
+		{
+			log_error("Failed to iterate over list of materialized views, "
+					  "see above for details");
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_iter_s_matview_init initializes an iterator over our catalog of
+ * materialized view entries.
+ */
+bool
+catalog_iter_s_matview_init(CatalogMatViewIterator *iter)
+{
+	sqlite3 *db = iter->catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_iter_s_matview_init: db is NULL");
+		return false;
+	}
+
+	iter->matview = (CatalogMatView *) calloc(1, sizeof(CatalogMatView));
+
+	if (iter->matview == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	char *sql =
+		"  select oid, nspname, relname, restore_list_name, exclude_data"
+		"    from s_matview";
+
+	SQLiteQuery *query = &(iter->query);
+
+	query->context = iter->matview;
+	query->fetchFunction = &catalog_s_matview_fetch;
+
+	if (!catalog_sql_prepare(db, sql, query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_iter_s_matview_next fetches the next CatalogMatView entry.
+ */
+bool
+catalog_iter_s_matview_next(CatalogMatViewIterator *iter)
+{
+	SQLiteQuery *query = &(iter->query);
+
+	int rc = catalog_sql_step(query);
+
+	if (rc == SQLITE_DONE)
+	{
+		iter->matview = NULL;
+
+		return true;
+	}
+
+	if (rc != SQLITE_ROW)
+	{
+		log_error("Failed to step through statement: %s", query->sql);
+		log_error("[SQLite] %s", sqlite3_errmsg(query->db));
+		return false;
+	}
+
+	return catalog_s_matview_fetch(query);
+}
+
+
+/*
+ * catalog_iter_s_matview_finish cleans up the iterator resources.
+ */
+bool
+catalog_iter_s_matview_finish(CatalogMatViewIterator *iter)
+{
+	SQLiteQuery *query = &(iter->query);
+
+	/* in case we finish before reaching the DONE step */
+	if (iter->matview != NULL)
+	{
+		iter->matview = NULL;
+	}
+
+	if (!catalog_sql_finalize(query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
 
 	return true;
 }
