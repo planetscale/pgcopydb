@@ -146,6 +146,23 @@ copydb_set_snapshot(CopyDataSpec *copySpecs)
 		return false;
 	}
 
+	/*
+	 * Detect read-only standby if not already known. In clone --follow the
+	 * snapshot comes from the logical replication slot and isReadOnly may
+	 * not have been set yet. We must use READ ONLY transaction mode on
+	 * standbys to avoid "cannot set transaction read-write mode during
+	 * recovery" errors.
+	 */
+	if (!snapshot->isReadOnly)
+	{
+		if (!pgsql_is_in_recovery(pgsql, &(snapshot->isReadOnly)))
+		{
+			log_error("Failed to check if source is in recovery");
+			(void) pgsql_finish(pgsql);
+			return false;
+		}
+	}
+
 	if (!pgsql_begin(pgsql))
 	{
 		/* errors have already been logged */

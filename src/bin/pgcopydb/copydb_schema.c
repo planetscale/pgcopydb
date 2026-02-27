@@ -453,13 +453,36 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 {
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	if (specs->sourceSnapshot.isReadOnly && specs->filters.type !=
-		SOURCE_FILTER_TYPE_NONE)
+	/*
+	 * Detect if the source is a read-only standby. The snapshot path sets
+	 * sourceSnapshot.isReadOnly, but the fresh-connection path (used by
+	 * pgcopydb list commands) does not, so query pg_is_in_recovery() as a
+	 * fallback.
+	 */
+	bool sourceIsReadOnly = specs->sourceSnapshot.isReadOnly;
+
+	if (!sourceIsReadOnly)
 	{
-		log_fatal("Connected to a standby server where pg_is_in_recovery(): "
-				  "pgcopydb does not support operating on standby server "
-				  "when --filters are used, as it needs to create temp tables");
-		return false;
+		if (!pgsql_is_in_recovery(src, &sourceIsReadOnly))
+		{
+			log_error("Failed to check if source is in recovery");
+			return false;
+		}
+
+		/*
+		 * Propagate the recovery flag to the snapshot so that COPY workers
+		 * use READ ONLY transaction mode. In clone --follow the snapshot
+		 * comes from the logical replication slot and copydb_export_snapshot
+		 * is never called, leaving sourceSnapshot.isReadOnly unset.
+		 */
+		specs->sourceSnapshot.isReadOnly = sourceIsReadOnly;
+	}
+
+	if (sourceIsReadOnly && specs->filters.type != SOURCE_FILTER_TYPE_NONE)
+	{
+		log_info("Connected to a read-only standby server with filters: "
+				 "using CTE-based filtering instead of temp tables");
+		specs->filters.isReadOnly = true;
 	}
 
 	/* check if we have needed privileges here */
@@ -471,7 +494,7 @@ copydb_fetch_source_schema(CopyDataSpec *specs, PGSQL *src)
 		return false;
 	}
 
-	if (!specs->hasDBTempPrivilege)
+	if (!specs->hasDBTempPrivilege && !specs->filters.isReadOnly)
 	{
 		log_fatal("Connecting with a role that does not have TEMP privileges "
 				  "on the current database on the source server");

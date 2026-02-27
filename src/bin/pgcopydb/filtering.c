@@ -735,6 +735,7 @@ filters_from_json(const char *jsonString, SourceFilters *filters)
 
 	/* Initialize filters to empty state */
 	filters->prepared = false;
+	filters->isReadOnly = false;
 	filters->type = SOURCE_FILTER_TYPE_NONE;
 	filters->includeOnlySchemaList.count = 0;
 	filters->includeOnlySchemaList.array = NULL;
@@ -752,6 +753,7 @@ filters_from_json(const char *jsonString, SourceFilters *filters)
 	filters->includeOnlyExtensionList.array = NULL;
 	filters->excludeExtensionList.count = 0;
 	filters->excludeExtensionList.array = NULL;
+	filters->ctePreamble = NULL;
 
 	/* Parse JSON string */
 	JSON_Value *jsFilter = json_parse_string(jsonString);

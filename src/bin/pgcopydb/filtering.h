@@ -102,6 +102,7 @@ typedef enum
 typedef struct SourceFilters
 {
 	bool prepared;
+	bool isReadOnly;
 	SourceFilterType type;
 	SourceFilterSchemaList includeOnlySchemaList;
 	SourceFilterSchemaList excludeSchemaList;
@@ -111,6 +112,7 @@ typedef struct SourceFilters
 	SourceFilterTableList excludeIndexList;
 	SourceFilterExtensionList includeOnlyExtensionList;
 	SourceFilterExtensionList excludeExtensionList;
+	char *ctePreamble;
 } SourceFilters;
 
 char * filterTypeToString(SourceFilterType type);
