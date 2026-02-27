@@ -5797,3 +5797,230 @@ getTableChecksum(void *ctx, PGresult *result)
 
 	context->parsedOk = errors == 0;
 }
+
+
+/*
+ * Context for view listing callback
+ */
+typedef struct SourceViewContext
+{
+	DatabaseCatalog *catalog;
+	bool parsedOk;
+} SourceViewContext;
+
+static void getViewArray(void *ctx, PGresult *result);
+
+
+/*
+ * schema_list_views grabs the list of views from the given source
+ * Postgres instance and stores them in the catalog.
+ */
+bool
+schema_list_views(PGSQL *pgsql,
+				  SourceFilters *filters,
+				  DatabaseCatalog *catalog)
+{
+	SourceViewContext context = { catalog, false };
+
+	log_trace("schema_list_views");
+
+	/* Simple query to get views - filtering support can be added later */
+	char *sql =
+		"SELECT c.oid, "
+		"       n.nspname, "
+		"       c.relname, "
+		"       n.nspname || '.' || c.relname as qname, "
+		"       'VIEW ' || n.nspname || '.' || c.relname as restore_list_name "
+		"  FROM pg_class c "
+		"  JOIN pg_namespace n ON n.oid = c.relnamespace "
+		" WHERE c.relkind = 'v' "
+		"   AND n.nspname NOT IN ('pg_catalog', 'information_schema') "
+		" ORDER BY n.nspname, c.relname";
+
+	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+								   &context, &getViewArray))
+	{
+		log_error("Failed to list views");
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to list views");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * getViewArray loops over the SQL result for the list of views and
+ * allocates an array of views then populates it with the query result.
+ */
+static void
+getViewArray(void *ctx, PGresult *result)
+{
+	SourceViewContext *context = (SourceViewContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	log_debug("schema_list_views: %d views", nTuples);
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceView view = { 0 };
+
+		/* fetch view information from query result */
+		char *value = PQgetvalue(result, rowNumber, 0);
+
+		if (!stringToUInt32(value, &(view.oid)))
+		{
+			log_error("Invalid OID \"%s\"", value);
+			context->parsedOk = false;
+			return;
+		}
+
+		value = PQgetvalue(result, rowNumber, 1);
+		strlcpy(view.nspname, value, sizeof(view.nspname));
+
+		value = PQgetvalue(result, rowNumber, 2);
+		strlcpy(view.relname, value, sizeof(view.relname));
+
+		value = PQgetvalue(result, rowNumber, 3);
+		strlcpy(view.qname, value, sizeof(view.qname));
+
+		value = PQgetvalue(result, rowNumber, 4);
+		strlcpy(view.restoreListName, value, sizeof(view.restoreListName));
+
+		/* now add the view to our internal catalog */
+		if (!catalog_add_s_view(context->catalog, &view))
+		{
+			log_error("Failed to add view \"%s\" to catalog", view.qname);
+			context->parsedOk = false;
+			return;
+		}
+	}
+
+	context->parsedOk = true;
+}
+
+
+/*
+ * Context for trigger listing callback
+ */
+typedef struct SourceTriggerContext
+{
+	DatabaseCatalog *catalog;
+	bool parsedOk;
+} SourceTriggerContext;
+
+static void getTriggerArray(void *ctx, PGresult *result);
+
+
+/*
+ * schema_list_triggers grabs the list of triggers from the given source
+ * Postgres instance and stores them in the catalog.
+ */
+bool
+schema_list_triggers(PGSQL *pgsql,
+					 SourceFilters *filters,
+					 DatabaseCatalog *catalog)
+{
+	SourceTriggerContext context = { catalog, false };
+
+	log_trace("schema_list_triggers");
+
+	/* Simple query to get triggers - filtering support can be added later */
+	char *sql =
+		"SELECT t.oid, "
+		"       t.tgname, "
+		"       n.nspname, "
+		"       c.relname, "
+		"       c.oid as tableoid, "
+		"       'TRIGGER ' || t.tgname || ' ON ' || n.nspname || '.' || c.relname as restore_list_name "
+		"  FROM pg_trigger t "
+		"  JOIN pg_class c ON c.oid = t.tgrelid "
+		"  JOIN pg_namespace n ON n.oid = c.relnamespace "
+		" WHERE NOT t.tgisinternal "
+		"   AND n.nspname NOT IN ('pg_catalog', 'information_schema') "
+		" ORDER BY c.oid, t.tgname";
+
+	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+								   &context, &getTriggerArray))
+	{
+		log_error("Failed to list triggers");
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to list triggers");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * getTriggerArray loops over the SQL result for the list of triggers and
+ * allocates an array of triggers then populates it with the query result.
+ */
+static void
+getTriggerArray(void *ctx, PGresult *result)
+{
+	SourceTriggerContext *context = (SourceTriggerContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	log_debug("schema_list_triggers: %d triggers", nTuples);
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceTrigger trigger = { 0 };
+
+		/* fetch trigger information from query result */
+		char *value = PQgetvalue(result, rowNumber, 0);
+
+		if (!stringToUInt32(value, &(trigger.oid)))
+		{
+			log_error("Invalid OID \"%s\"", value);
+			context->parsedOk = false;
+			return;
+		}
+
+		value = PQgetvalue(result, rowNumber, 1);
+		strlcpy(trigger.tgname, value, sizeof(trigger.tgname));
+
+		value = PQgetvalue(result, rowNumber, 2);
+		strlcpy(trigger.nspname, value, sizeof(trigger.nspname));
+
+		value = PQgetvalue(result, rowNumber, 3);
+		strlcpy(trigger.relname, value, sizeof(trigger.relname));
+
+		value = PQgetvalue(result, rowNumber, 4);
+
+		if (!stringToUInt32(value, &(trigger.tableoid)))
+		{
+			log_error("Invalid table OID \"%s\"", value);
+			context->parsedOk = false;
+			return;
+		}
+
+		value = PQgetvalue(result, rowNumber, 5);
+		strlcpy(trigger.restoreListName, value, sizeof(trigger.restoreListName));
+
+		/* build qname */
+		sformat(trigger.qname, sizeof(trigger.qname), "%s.%s",
+				trigger.nspname, trigger.tgname);
+
+		/* now add the trigger to our internal catalog */
+		if (!catalog_add_s_trigger(context->catalog, &trigger))
+		{
+			log_error("Failed to add trigger \"%s\" to catalog", trigger.qname);
+			context->parsedOk = false;
+			return;
+		}
+	}
+
+	context->parsedOk = true;
+}

@@ -1,16 +1,31 @@
 ### pgcopydb (Unreleased) ###
 
 ### Added
-* Add support for PostgreSQL 17 and 18
-* Update all test infrastructure to PostgreSQL 17
-* Update CI pipeline to test against PostgreSQL 16, 17, and 18
+* Support for PostgreSQL 17 and 18
+* New `--skip-publications` flag allows migrations to proceed when publications already exist on the source database or need to be managed separately
+* New `pgcopydb list views` command to list all views from the source database
+* New `pgcopydb list triggers` command to list all triggers from the source database with schema and table details
+* Enhanced failure reporting: When migrations fail, pgcopydb now displays a detailed summary showing completed phases, failure location, progress within the failed phase, and resource counts (tables, indexes, constraints, sequences, views, triggers)
+* Views and triggers are now tracked in internal SQLite catalogs and included in migration summaries
 
 ### Fixed
-* Fix "database source is already in use" error when using `--follow` with `--filters` (#829, #871, #910)
-* Fix catalog mismatch errors when using different commands in sequence with filters (#869, #868)
-* Fix transaction state management for `clone --follow --snapshot` workflows
-* Make catalog_attach() idempotent to prevent concurrent process conflicts
-* Tolerate minor pg_restore errors during schema restoration - pgcopydb now continues when pg_restore exits with code 1 but reports "errors ignored on restore: N" where N ≤ 10 (configurable via MAX_TOLERATED_RESTORE_ERRORS). This allows migrations to proceed through minor extension version mismatches (e.g., PostGIS 3.1.5 → 3.5.3) that don't affect data integrity.
+
+**Migrations with Filters:**
+* Migrations using `--follow` with table/schema filters now work reliably without "database source is already in use" errors (#624, #829, #871, #910)
+* Running multiple pgcopydb commands with filters in sequence no longer causes catalog conflicts
+* Filters are now correctly applied during both the initial copy and ongoing replication phases
+
+**Change Data Capture Improvements:**
+* pgcopydb now works alongside other replication tools (PeerDB, Debezium, etc.) without conflicts
+* Tables with prepared statements (PREPARE/EXECUTE) are now replicated correctly
+* JSON and JSONB columns replicate properly when using the test_decoding plugin (#919)
+
+**Schema Restoration:**
+* Migrations now continue successfully when minor extension version differences exist between source and target (e.g., PostGIS 3.1.5 → 3.5.3)
+
+**Online Migration Stability:**
+* `clone --follow --snapshot` workflows now handle transaction state correctly
+* Concurrent pgcopydb processes no longer conflict when accessing the same source database
 
 ### pgcopydb v0.17 (August 7, 2024) ###
 

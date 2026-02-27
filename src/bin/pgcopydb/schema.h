@@ -230,6 +230,48 @@ typedef struct SourceSequence
 
 
 /*
+ * SourceView caches the information we need about all the views found
+ * in the source database.
+ */
+typedef struct SourceView
+{
+	uint32_t oid;
+	char qname[PG_NAMEDATALEN_FQ];
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
+	char restoreListName[RESTORE_LIST_NAMEDATALEN];
+} SourceView;
+
+typedef struct SourceViewArray
+{
+	int count;
+	SourceView *array;          /* malloc'ed area */
+} SourceViewArray;
+
+
+/*
+ * SourceTrigger caches the information we need about all the triggers found
+ * in the source database.
+ */
+typedef struct SourceTrigger
+{
+	uint32_t oid;
+	char tgname[PG_NAMEDATALEN];
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
+	uint32_t tableoid;
+	char qname[PG_NAMEDATALEN_FQ];
+	char restoreListName[RESTORE_LIST_NAMEDATALEN];
+} SourceTrigger;
+
+typedef struct SourceTriggerArray
+{
+	int count;
+	SourceTrigger *array;       /* malloc'ed area */
+} SourceTriggerArray;
+
+
+/*
  * SourceIndex caches the information we need about all the indexes attached to
  * the ordinary tables found in the source database.
  */
@@ -436,6 +478,14 @@ bool schema_list_partitions(PGSQL *pgsql,
 bool schema_list_sequences(PGSQL *pgsql,
 						   SourceFilters *filters,
 						   DatabaseCatalog *catalog);
+
+bool schema_list_views(PGSQL *pgsql,
+					   SourceFilters *filters,
+					   DatabaseCatalog *catalog);
+
+bool schema_list_triggers(PGSQL *pgsql,
+						  SourceFilters *filters,
+						  DatabaseCatalog *catalog);
 
 bool schema_get_sequence_value(PGSQL *pgsql, SourceSequence *seq);
 bool schema_list_relpages(PGSQL *pgsql, SourceTable *table, DatabaseCatalog *catalog);

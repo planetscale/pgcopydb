@@ -150,6 +150,8 @@ typedef struct CatalogCounts
 	uint64_t indexes;
 	uint64_t constraints;
 	uint64_t sequences;
+	uint64_t views;
+	uint64_t triggers;
 
 	uint64_t roles;
 	uint64_t databases;
@@ -190,6 +192,62 @@ bool catalog_lookup_s_matview_by_oid(DatabaseCatalog *catalog,
 									 CatalogMatView *result,
 									 uint32_t oid);
 bool catalog_s_matview_fetch(SQLiteQuery *query);
+
+/*
+ * Views
+ */
+bool catalog_add_s_view(DatabaseCatalog *catalog, SourceView *view);
+
+bool catalog_lookup_s_view_by_oid(DatabaseCatalog *catalog,
+								  SourceView *result,
+								  uint32_t oid);
+
+typedef bool (SourceViewIterFun)(void *context, SourceView *view);
+
+typedef struct SourceViewIterator
+{
+	DatabaseCatalog *catalog;
+	SourceView *view;
+	SQLiteQuery query;
+} SourceViewIterator;
+
+bool catalog_iter_s_view(DatabaseCatalog *catalog,
+						 void *context,
+						 SourceViewIterFun *callback);
+
+bool catalog_iter_s_view_init(SourceViewIterator *iter);
+bool catalog_iter_s_view_next(SourceViewIterator *iter);
+bool catalog_iter_s_view_finish(SourceViewIterator *iter);
+
+bool catalog_s_view_fetch(SQLiteQuery *query);
+
+/*
+ * Triggers
+ */
+bool catalog_add_s_trigger(DatabaseCatalog *catalog, SourceTrigger *trigger);
+
+bool catalog_lookup_s_trigger_by_oid(DatabaseCatalog *catalog,
+									 SourceTrigger *result,
+									 uint32_t oid);
+
+typedef bool (SourceTriggerIterFun)(void *context, SourceTrigger *trigger);
+
+typedef struct SourceTriggerIterator
+{
+	DatabaseCatalog *catalog;
+	SourceTrigger *trigger;
+	SQLiteQuery query;
+} SourceTriggerIterator;
+
+bool catalog_iter_s_trigger(DatabaseCatalog *catalog,
+							void *context,
+							SourceTriggerIterFun *callback);
+
+bool catalog_iter_s_trigger_init(SourceTriggerIterator *iter);
+bool catalog_iter_s_trigger_next(SourceTriggerIterator *iter);
+bool catalog_iter_s_trigger_finish(SourceTriggerIterator *iter);
+
+bool catalog_s_trigger_fetch(SQLiteQuery *query);
 
 /*
  * Tables and their attributes and parts (COPY partitioning).

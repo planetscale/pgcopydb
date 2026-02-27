@@ -35,6 +35,8 @@ static void cli_list_collations(int argc, char **argv);
 static void cli_list_tables(int argc, char **argv);
 static void cli_list_table_parts(int argc, char **argv);
 static void cli_list_sequences(int argc, char **argv);
+static void cli_list_views(int argc, char **argv);
+static void cli_list_triggers(int argc, char **argv);
 static void cli_list_indexes(int argc, char **argv);
 static void cli_list_depends(int argc, char **argv);
 static void cli_list_schema(int argc, char **argv);
@@ -54,6 +56,8 @@ static bool cli_list_colls_hook(void *context, SourceCollation *coll);
 static bool cli_list_table_print_hook(void *context, SourceTable *table);
 static bool cli_list_table_part_print_hook(void *ctx, SourceTableParts *part);
 static bool cli_list_seq_print_hook(void *context, SourceSequence *seq);
+static bool cli_list_view_print_hook(void *context, SourceView *view);
+static bool cli_list_trigger_print_hook(void *context, SourceTrigger *trigger);
 static bool cli_list_index_print_hook(void *context, SourceIndex *index);
 static bool cli_list_depends_hook(void *ctx, SourceDepend *dep);
 
@@ -129,6 +133,30 @@ static CommandLine list_sequences_command =
 		cli_list_db_getopts,
 		cli_list_sequences);
 
+static CommandLine list_views_command =
+	make_command(
+		"views",
+		"List all the source views",
+		" --source ... ",
+		"  --source            Postgres URI to the source database\n"
+		"  --force             Force fetching catalogs again\n"
+		"  --filter <filename> Use the filters defined in <filename>\n",
+		cli_list_db_getopts,
+		cli_list_views);
+
+static CommandLine list_triggers_command =
+	make_command(
+		"triggers",
+		"List all the source triggers",
+		" --source ... [ --schema-name [ --table-name ] ]",
+		"  --source            Postgres URI to the source database\n"
+		"  --force             Force fetching catalogs again\n"
+		"  --schema-name       Filter by schema name\n"
+		"  --table-name        Filter by table name\n"
+		"  --filter <filename> Use the filters defined in <filename>\n",
+		cli_list_db_getopts,
+		cli_list_triggers);
+
 static CommandLine list_indexes_command =
 	make_command(
 		"indexes",
@@ -188,6 +216,8 @@ static CommandLine *list_subcommands[] = {
 	&list_tables_command,
 	&list_table_parts_command,
 	&list_sequences_command,
+	&list_views_command,
+	&list_triggers_command,
 	&list_indexes_command,
 	&list_depends_command,
 	&list_schema_command,
@@ -1512,6 +1542,178 @@ cli_list_seq_print_hook(void *context, SourceSequence *seq)
 			seq->ownedby,
 			seq->attrelid,
 			seq->attroid);
+
+	return true;
+}
+
+
+/*
+ * cli_list_views fetches the list of views from the source database and
+ * prints them to stdout.
+ */
+static void
+cli_list_views(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	bool createWorkDir = true;
+
+	if (!copydb_init_specs_from_listdboptions(&copySpecs,
+											  &listDBoptions,
+											  DATA_SECTION_ALL,
+											  createWorkDir))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	SourceFilters *filters = &(copySpecs.filters);
+
+	if (!IS_EMPTY_STRING_BUFFER(listDBoptions.filterFileName))
+	{
+		if (!parse_filters(listDBoptions.filterFileName, filters))
+		{
+			log_error("Failed to parse filters in file \"%s\"",
+					  listDBoptions.filterFileName);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
+	}
+
+	/*
+	 * Prepare our internal catalogs for storing the source database catalog
+	 * query results. When --force is used then we fetch the catalogs again.
+	 */
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
+	{
+		log_error("Failed to fetch a local copy of the catalogs, "
+				  "see above for details");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	DatabaseCatalog *sourceDB = &(copySpecs.catalogs.source);
+
+	fformat(stdout, "%8s | %30s | %30s \n",
+			"OID", "Schema Name", "View Name");
+
+	fformat(stdout, "%8s-+-%30s-+-%30s\n",
+			"--------",
+			"------------------------------",
+			"------------------------------");
+
+	if (!catalog_iter_s_view(sourceDB, NULL, &cli_list_view_print_hook))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	fformat(stdout, "\n");
+}
+
+
+/*
+ * cli_list_view_print_hook is an iterator callback function.
+ */
+static bool
+cli_list_view_print_hook(void *context, SourceView *view)
+{
+	if (view == NULL)
+	{
+		log_error("BUG: cli_list_view_print_hook called with a NULL view");
+		return false;
+	}
+
+	fformat(stdout, "%8d | %30s | %30s\n",
+			view->oid,
+			view->nspname,
+			view->relname);
+
+	return true;
+}
+
+
+/*
+ * cli_list_triggers fetches the list of triggers from the source database and
+ * prints them to stdout.
+ */
+static void
+cli_list_triggers(int argc, char **argv)
+{
+	CopyDataSpec copySpecs = { 0 };
+
+	bool createWorkDir = true;
+
+	if (!copydb_init_specs_from_listdboptions(&copySpecs,
+											  &listDBoptions,
+											  DATA_SECTION_ALL,
+											  createWorkDir))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	SourceFilters *filters = &(copySpecs.filters);
+
+	if (!IS_EMPTY_STRING_BUFFER(listDBoptions.filterFileName))
+	{
+		if (!parse_filters(listDBoptions.filterFileName, filters))
+		{
+			log_error("Failed to parse filters in file \"%s\"",
+					  listDBoptions.filterFileName);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
+	}
+
+	/*
+	 * Prepare our internal catalogs for storing the source database catalog
+	 * query results. When --force is used then we fetch the catalogs again.
+	 */
+	if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
+	{
+		log_error("Failed to fetch a local copy of the catalogs, "
+				  "see above for details");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	DatabaseCatalog *sourceDB = &(copySpecs.catalogs.source);
+
+	fformat(stdout, "%8s | %25s | %25s | %25s | %10s\n",
+			"OID", "Trigger Name", "Schema Name", "Table Name", "Table OID");
+
+	fformat(stdout, "%8s-+-%25s-+-%25s-+-%25s-+-%10s\n",
+			"--------",
+			"-------------------------",
+			"-------------------------",
+			"-------------------------",
+			"----------");
+
+	if (!catalog_iter_s_trigger(sourceDB, NULL, &cli_list_trigger_print_hook))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	fformat(stdout, "\n");
+}
+
+
+/*
+ * cli_list_trigger_print_hook is an iterator callback function.
+ */
+static bool
+cli_list_trigger_print_hook(void *context, SourceTrigger *trigger)
+{
+	if (trigger == NULL)
+	{
+		log_error("BUG: cli_list_trigger_print_hook called with a NULL trigger");
+		return false;
+	}
+
+	fformat(stdout, "%8d | %25s | %25s | %25s | %10d\n",
+			trigger->oid,
+			trigger->tgname,
+			trigger->nspname,
+			trigger->relname,
+			trigger->tableoid);
 
 	return true;
 }
