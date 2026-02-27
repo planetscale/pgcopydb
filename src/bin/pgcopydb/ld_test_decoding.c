@@ -52,6 +52,7 @@ typedef struct TestDecodingColumns
 	int colnameLen;
 	char *valueStart;
 	int valueLen;
+	bool isQuoted;
 
 	struct TestDecodingColumns *next;
 } TestDecodingColumns;
@@ -745,6 +746,9 @@ parseNextColumn(TestDecodingColumns *cols,
 {
 	char *ptr = (char *) (header->message + header->pos);
 
+	/* explicitly initialize isQuoted to false for code clarity */
+	cols->isQuoted = false;
+
 	if (ptr == NULL || *ptr == '\0')
 	{
 		header->eom = true;
@@ -830,7 +834,14 @@ parseNextColumn(TestDecodingColumns *cols,
 
 	sformat(typname, sizeof(typname), "%.*s", typLen, typStart);
 
-	if (streq(typname, "text"))
+	/*
+	 * Treat text, json, and jsonb types the same way for quote un-escaping.
+	 * test_decoding outputs all of these with doubled single-quotes that need
+	 * to be collapsed.
+	 */
+	if (streq(typname, "text") ||
+		streq(typname, "json") ||
+		streq(typname, "jsonb"))
 	{
 		cols->oid = TEXTOID;
 	}
@@ -852,6 +863,8 @@ parseNextColumn(TestDecodingColumns *cols,
 	 */
 	if (*ptr == '\'')
 	{
+		cols->isQuoted = true;
+
 		/* skip the opening single-quote now */
 		char *cur = ptr + 1;
 
@@ -901,6 +914,8 @@ parseNextColumn(TestDecodingColumns *cols,
 	 */
 	else if (*ptr == 'B')
 	{
+		cols->isQuoted = true;
+
 		/* skip B and ' */
 		char *start = ptr + 2;
 		char *end = strchr(start, '\'');
@@ -1015,7 +1030,9 @@ listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 		}
 
 		/* strlen("null") == 4 */
-		if (strncmp(cur->valueStart, "null", 4) == 0)
+		if (!cur->isQuoted &&
+			cur->valueLen == 4 &&
+			strncmp(cur->valueStart, "null", 4) == 0)
 		{
 			valueColumn->isNull = true;
 		}
@@ -1040,19 +1057,26 @@ listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 				return false;
 			}
 
-			/* copy the string contents without the surrounding quotes */
-			for (int pidx = 0, vidx = 0; pidx < cur->valueLen; pidx++)
+			/*
+			 * Un-double the single-quotes: PostgreSQL doubles them as an escape
+			 * mechanism, so '' becomes '. We need to handle consecutive pairs
+			 * correctly: '''' should become '', not '.
+			 */
+			for (int src = 0, dst = 0; src < cur->valueLen; src++)
 			{
-				char *ptr = cur->valueStart + pidx;
-				char *nxt = cur->valueStart + pidx + 1;
-
-				/* unescape the single-quotes */
-				if (*ptr == '\'' && *nxt == '\'')
+				if (cur->valueStart[src] == '\'' &&
+					(src + 1) < cur->valueLen &&
+					cur->valueStart[src + 1] == '\'')
 				{
-					continue;
+					/* Found a doubled quote - copy one quote and skip the second */
+					valueColumn->val.str[dst++] = '\'';
+					src++;  /* Skip the second quote of the pair */
 				}
-
-				valueColumn->val.str[vidx++] = *ptr;
+				else
+				{
+					/* Regular character - copy as-is */
+					valueColumn->val.str[dst++] = cur->valueStart[src];
+				}
 			}
 		}
 		else
