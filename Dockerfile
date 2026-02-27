@@ -1,12 +1,15 @@
 # syntax=docker/dockerfile:latest
 # Define a base image with all our build dependencies.
-FROM --platform=${TARGETPLATFORM} debian:11-slim AS build
+FROM debian:11-slim AS build
 
 # multi-arch
 ARG TARGETPLATFORM
 ARG TARGETOS
 ARG TARGETARCH
 ARG PGVERSION=16
+
+# Configure apt to retry on transient failures
+RUN echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries
 
 RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
   && apt install -qqy --no-install-recommends \
@@ -86,7 +89,7 @@ RUN make -s clean && make -s -j$(nproc) install
 COPY tests tests
 
 # Now the "run" image, as small as possible
-FROM --platform=${TARGETPLATFORM} debian:11-slim AS run
+FROM debian:11-slim AS run
 
 # multi-arch
 ARG TARGETPLATFORM
@@ -96,6 +99,9 @@ ARG PGVERSION=16
 
 # used to configure Github Packages
 LABEL org.opencontainers.image.source=https://github.com/dimitri/pgcopydb
+
+# Configure apt to retry on transient failures
+RUN echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries
 
 RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
   && apt install -qqy --no-install-recommends \
