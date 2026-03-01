@@ -75,6 +75,16 @@ filterTypeToString(SourceFilterType type)
 		{
 			return "SOURCE_FILTER_TYPE_LIST_EXCL_EXTENSION";
 		}
+
+		case SOURCE_FILTER_TYPE_EXCL_EVENT_TRIGGER:
+		{
+			return "SOURCE_FILTER_TYPE_EXCL_EVENT_TRIGGER";
+		}
+
+		case SOURCE_FILTER_TYPE_LIST_EXCL_EVENT_TRIGGER:
+		{
+			return "SOURCE_FILTER_TYPE_LIST_EXCL_EVENT_TRIGGER";
+		}
 	}
 
 	/* that's a bug, the lack of a default branch above should prevent it */
@@ -131,6 +141,16 @@ filterTypeComplement(SourceFilterType type)
 		case SOURCE_FILTER_TYPE_LIST_EXCL_EXTENSION:
 		{
 			return SOURCE_FILTER_TYPE_EXCL_EXTENSION;
+		}
+
+		case SOURCE_FILTER_TYPE_EXCL_EVENT_TRIGGER:
+		{
+			return SOURCE_FILTER_TYPE_LIST_EXCL_EVENT_TRIGGER;
+		}
+
+		case SOURCE_FILTER_TYPE_LIST_EXCL_EVENT_TRIGGER:
+		{
+			return SOURCE_FILTER_TYPE_EXCL_EVENT_TRIGGER;
 		}
 
 		default:
@@ -194,6 +214,7 @@ parse_filters(const char *filename, SourceFilters *filters)
 		},
 		{ "exclude-extension", SOURCE_FILTER_EXCLUDE_EXTENSION, NULL },
 		{ "include-only-extension", SOURCE_FILTER_INCLUDE_ONLY_EXTENSION, NULL },
+		{ "exclude-event-trigger", SOURCE_FILTER_EXCLUDE_EVENT_TRIGGER, NULL },
 		{ "", SOURCE_FILTER_UNKNOWN, NULL },
 	};
 
@@ -382,6 +403,34 @@ parse_filters(const char *filename, SourceFilters *filters)
 				break;
 			}
 
+			case SOURCE_FILTER_EXCLUDE_EVENT_TRIGGER:
+			{
+				filters->excludeEventTriggerList.count = optionCount;
+				filters->excludeEventTriggerList.array =
+					(SourceFilterEventTrigger *) calloc(optionCount,
+														sizeof(SourceFilterEventTrigger));
+
+				if (filters->excludeEventTriggerList.array == NULL)
+				{
+					log_error(ALLOCATION_FAILED_ERROR);
+					return false;
+				}
+
+				for (int o = 0; o < optionCount; o++)
+				{
+					SourceFilterEventTrigger *trigger =
+						&(filters->excludeEventTriggerList.array[o]);
+
+					const char *optionName =
+						ini_property_name(ini, sectionIndex, o);
+
+					strlcpy(trigger->evtname, optionName, sizeof(trigger->evtname));
+
+					log_debug("excluding event trigger \"%s\"", trigger->evtname);
+				}
+				break;
+			}
+
 			default:
 			{
 				log_error("BUG: unknown section number %d", i);
@@ -480,7 +529,8 @@ parse_filters(const char *filename, SourceFilters *filters)
 			 filters->excludeTableList.count > 0 ||
 			 filters->excludeTableDataList.count > 0 ||
 			 filters->excludeExtensionList.count > 0 ||
-			 filters->includeOnlyExtensionList.count > 0)
+			 filters->includeOnlyExtensionList.count > 0 ||
+			 filters->excludeEventTriggerList.count > 0)
 	{
 		filters->type = SOURCE_FILTER_TYPE_EXCL;
 	}
@@ -674,6 +724,22 @@ filters_as_json(SourceFilters *filters, JSON_Value *jsFilter)
 		json_object_set_value(jsFilterObj, "exclude-extension", jsExt);
 	}
 
+	/* exclude-event-trigger */
+	if (filters->excludeEventTriggerList.count > 0)
+	{
+		JSON_Value *jsEvt = json_value_init_array();
+		JSON_Array *jsEvtArray = json_value_get_array(jsEvt);
+
+		for (int i = 0; i < filters->excludeEventTriggerList.count; i++)
+		{
+			char *evtname = filters->excludeEventTriggerList.array[i].evtname;
+
+			json_array_append_string(jsEvtArray, evtname);
+		}
+
+		json_object_set_value(jsFilterObj, "exclude-event-trigger", jsEvt);
+	}
+
 	/* exclude table lists */
 	struct section
 	{
@@ -753,6 +819,8 @@ filters_from_json(const char *jsonString, SourceFilters *filters)
 	filters->includeOnlyExtensionList.array = NULL;
 	filters->excludeExtensionList.count = 0;
 	filters->excludeExtensionList.array = NULL;
+	filters->excludeEventTriggerList.count = 0;
+	filters->excludeEventTriggerList.array = NULL;
 	filters->ctePreamble = NULL;
 
 	/* Parse JSON string */
@@ -805,6 +873,22 @@ filters_from_json(const char *jsonString, SourceFilters *filters)
 		else if (strcmp(typeStr, "SOURCE_FILTER_TYPE_LIST_EXCL_INDEX") == 0)
 		{
 			filters->type = SOURCE_FILTER_TYPE_LIST_EXCL_INDEX;
+		}
+		else if (strcmp(typeStr, "SOURCE_FILTER_TYPE_EXCL_EXTENSION") == 0)
+		{
+			filters->type = SOURCE_FILTER_TYPE_EXCL_EXTENSION;
+		}
+		else if (strcmp(typeStr, "SOURCE_FILTER_TYPE_LIST_EXCL_EXTENSION") == 0)
+		{
+			filters->type = SOURCE_FILTER_TYPE_LIST_EXCL_EXTENSION;
+		}
+		else if (strcmp(typeStr, "SOURCE_FILTER_TYPE_EXCL_EVENT_TRIGGER") == 0)
+		{
+			filters->type = SOURCE_FILTER_TYPE_EXCL_EVENT_TRIGGER;
+		}
+		else if (strcmp(typeStr, "SOURCE_FILTER_TYPE_LIST_EXCL_EVENT_TRIGGER") == 0)
+		{
+			filters->type = SOURCE_FILTER_TYPE_LIST_EXCL_EVENT_TRIGGER;
 		}
 		else
 		{
@@ -946,6 +1030,42 @@ filters_from_json(const char *jsonString, SourceFilters *filters)
 				{
 					strlcpy(filters->excludeExtensionList.array[i].extname,
 							extname,
+							PG_NAMEDATALEN);
+				}
+			}
+		}
+	}
+
+	/* Parse exclude-event-trigger array */
+	JSON_Array *excludeEvtArray =
+		json_object_get_array(jsFilterObj, "exclude-event-trigger");
+
+	if (excludeEvtArray != NULL)
+	{
+		size_t count = json_array_get_count(excludeEvtArray);
+		filters->excludeEventTriggerList.count = count;
+
+		if (count > 0)
+		{
+			filters->excludeEventTriggerList.array =
+				(SourceFilterEventTrigger *) calloc(count,
+													sizeof(SourceFilterEventTrigger));
+
+			if (filters->excludeEventTriggerList.array == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				json_value_free(jsFilter);
+				return false;
+			}
+
+			for (size_t i = 0; i < count; i++)
+			{
+				const char *evtname = json_array_get_string(excludeEvtArray, i);
+
+				if (evtname != NULL)
+				{
+					strlcpy(filters->excludeEventTriggerList.array[i].evtname,
+							evtname,
 							PG_NAMEDATALEN);
 				}
 			}
