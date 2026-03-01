@@ -6304,6 +6304,57 @@ catalog_prepare_filter(DatabaseCatalog *catalog,
 	}
 
 	/*
+	 * Implement exclude-event-trigger filtering: insert event trigger names
+	 * directly into the filter table so pg_restore skips them by name.
+	 *
+	 * Event triggers have no parent schema, so the pg_restore list entry
+	 * format is "- <evtname> <owner>", and the restoreListName after
+	 * stripping the owner is "- <evtname>".
+	 */
+	if (filters != NULL && filters->excludeEventTriggerList.count > 0)
+	{
+		for (int i = 0; i < filters->excludeEventTriggerList.count; i++)
+		{
+			SourceFilterEventTrigger *evt =
+				&filters->excludeEventTriggerList.array[i];
+
+			char restoreListName[PG_NAMEDATALEN + 3] = { 0 };
+			sformat(restoreListName, sizeof(restoreListName),
+					"- %s", evt->evtname);
+
+			char *filter_evt_sql =
+				"insert or ignore into filter(oid, restore_list_name, kind) "
+				"values(0, $1, 'event-trigger')";
+
+			if (!catalog_sql_prepare(db, filter_evt_sql, &query))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			BindParam params[] = {
+				{ BIND_PARAMETER_TYPE_TEXT, "evtname", 0, restoreListName }
+			};
+
+			int count = sizeof(params) / sizeof(params[0]);
+
+			if (!catalog_sql_bind(&query, params, count))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			if (!catalog_sql_execute_once(&query))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			log_info("Filtering out event trigger \"%s\"", evt->evtname);
+		}
+	}
+
+	/*
 	 * Implement --skip-collations
 	 */
 	if (skipCollations)
