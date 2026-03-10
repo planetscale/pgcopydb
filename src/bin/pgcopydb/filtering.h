@@ -24,7 +24,8 @@ typedef enum
 	SOURCE_FILTER_EXCLUDE_INDEX,
 	SOURCE_FILTER_INCLUDE_ONLY_TABLE,
 	SOURCE_FILTER_EXCLUDE_EXTENSION,
-	SOURCE_FILTER_INCLUDE_ONLY_EXTENSION
+	SOURCE_FILTER_INCLUDE_ONLY_EXTENSION,
+	SOURCE_FILTER_EXCLUDE_EVENT_TRIGGER
 } SourceFilterSection;
 
 typedef struct SourceFilterSchema
@@ -48,6 +49,18 @@ typedef struct SourceFilterExtensionList
 	int count;
 	SourceFilterExtension *array;  /* malloc'ed area */
 } SourceFilterExtensionList;
+
+
+typedef struct SourceFilterEventTrigger
+{
+	char evtname[PG_NAMEDATALEN];
+} SourceFilterEventTrigger;
+
+typedef struct SourceFilterEventTriggerList
+{
+	int count;
+	SourceFilterEventTrigger *array;    /* malloc'ed area */
+} SourceFilterEventTriggerList;
 
 
 typedef struct SourceFilterTable
@@ -96,7 +109,10 @@ typedef enum
 	SOURCE_FILTER_TYPE_LIST_EXCL_INDEX,
 
 	SOURCE_FILTER_TYPE_EXCL_EXTENSION,
-	SOURCE_FILTER_TYPE_LIST_EXCL_EXTENSION
+	SOURCE_FILTER_TYPE_LIST_EXCL_EXTENSION,
+
+	SOURCE_FILTER_TYPE_EXCL_EVENT_TRIGGER,
+	SOURCE_FILTER_TYPE_LIST_EXCL_EVENT_TRIGGER
 } SourceFilterType;
 
 typedef struct SourceFilters
@@ -112,6 +128,7 @@ typedef struct SourceFilters
 	SourceFilterTableList excludeIndexList;
 	SourceFilterExtensionList includeOnlyExtensionList;
 	SourceFilterExtensionList excludeExtensionList;
+	SourceFilterEventTriggerList excludeEventTriggerList;
 	char *ctePreamble;
 } SourceFilters;
 

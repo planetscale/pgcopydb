@@ -1,0 +1,5 @@
+-[ RECORD 1 ]---------------
+evtname    | evt_keep
+evtevent   | ddl_command_end
+evtenabled | O
+
