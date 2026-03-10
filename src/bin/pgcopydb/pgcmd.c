@@ -447,6 +447,29 @@ pg_dump_db(PostgresPaths *pgPaths,
 		args[argsIndex++] = nspname;
 	}
 
+	/* apply [exclude-table] filtering */
+	char excludeTableNames[PG_CMD_MAX_ARG][PG_NAMEDATALEN_FQ];
+
+	for (int i = 0; i < filters->excludeTableList.count; i++)
+	{
+		char *nspname = filters->excludeTableList.array[i].nspname;
+		char *relname = filters->excludeTableList.array[i].relname;
+
+		if (PG_CMD_MAX_ARG < (argsIndex + 2))
+		{
+			log_error("Failed to call pg_dump, too many exclude-table "
+					  "entries: argsIndex %d > %d",
+					  argsIndex + 2, PG_CMD_MAX_ARG);
+			return false;
+		}
+
+		sformat(excludeTableNames[i], PG_NAMEDATALEN_FQ, "%s.%s",
+				nspname, relname);
+
+		args[argsIndex++] = "--exclude-table";
+		args[argsIndex++] = excludeTableNames[i];
+	}
+
 	args[argsIndex++] = "--file";
 	args[argsIndex++] = (char *) filename;
 	args[argsIndex++] = (char *) connStrings->safeSourcePGURI.pguri;
