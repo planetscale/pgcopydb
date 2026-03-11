@@ -119,3 +119,16 @@ create table partitioned_tables.sellers_active partition of partitioned_tables.s
 create table partitioned_tables.sellers_archive partition of partitioned_tables.sellers for values in ('1');
 
 insert into partitioned_tables.sellers (id, archive) values (1, 0), (2, 1), (3, 0);
+
+--
+-- To test event trigger filtering
+--
+create or replace function foo.evt_trigger_func()
+returns event_trigger language plpgsql as $$
+begin
+  raise notice 'event trigger fired';
+end;
+$$;
+
+create event trigger evt_keep on ddl_command_end execute function foo.evt_trigger_func();
+create event trigger evt_exclude on ddl_command_start execute function foo.evt_trigger_func();

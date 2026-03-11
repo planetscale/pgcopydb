@@ -73,9 +73,6 @@ jq "${JQSCRIPT}" ${SHAREDIR}/${WALFILE} > ${result}
 diff ${expected} ${result} || cat ${SHAREDIR}/${WALFILE}
 diff ${expected} ${result}
 
-# now prefetch the changes again, which should be a noop
-pgcopydb stream prefetch --resume --endpos "${lsn}" --trace
-
 # now transform the JSON file into SQL
 SQLFILENAME=`basename ${WALFILE} .json`.sql
 
@@ -88,6 +85,9 @@ diff ${SHAREDIR}/${SQLFILE} /tmp/${SQLFILENAME}
 DIFFOPTS='-I BEGIN -I COMMIT -I KEEPALIVE -I SWITCH -I ENDPOS -I ROLLBACK'
 
 diff ${DIFFOPTS} /usr/src/pgcopydb/${SQLFILE} ${SHAREDIR}/${SQLFILENAME}
+
+# now prefetch the changes again, which should be a noop
+pgcopydb stream prefetch --resume --endpos "${lsn}" --trace
 
 # now allow for replaying/catching-up changes
 pgcopydb stream sentinel set apply
