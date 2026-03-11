@@ -1,0 +1,15 @@
+-[ RECORD 1 ]------------+--
+tbl_with_cross_fk_exists | 1
+
+-[ RECORD 1 ]--+--
+cross_fk_count | 0
+
+-[ RECORD 1 ]----+--
+cross_view_count | 0
+
+-[ RECORD 1 ]-------------+--
+tbl_with_cross_rls_exists | 1
+
+-[ RECORD 1 ]------+--
+cross_policy_count | 0
+

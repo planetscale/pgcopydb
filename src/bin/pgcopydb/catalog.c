@@ -8468,13 +8468,18 @@ catalog_s_depend_fetch(SQLiteQuery *query)
 	/* cleanup the memory area before re-use */
 	bzero(dep, sizeof(SourceDepend));
 
-	strlcpy(dep->nspname,
-			(char *) sqlite3_column_text(query->ppStmt, 0),
-			sizeof(dep->nspname));
+	const char *nspname = (const char *) sqlite3_column_text(query->ppStmt, 0);
+	const char *relname = (const char *) sqlite3_column_text(query->ppStmt, 1);
 
-	strlcpy(dep->relname,
-			(char *) sqlite3_column_text(query->ppStmt, 1),
-			sizeof(dep->relname));
+	if (nspname != NULL)
+	{
+		strlcpy(dep->nspname, nspname, sizeof(dep->nspname));
+	}
+
+	if (relname != NULL)
+	{
+		strlcpy(dep->relname, relname, sizeof(dep->relname));
+	}
 
 	dep->refclassid = sqlite3_column_int64(query->ppStmt, 2);
 	dep->refobjid = sqlite3_column_int64(query->ppStmt, 3);
@@ -8484,7 +8489,7 @@ catalog_s_depend_fetch(SQLiteQuery *query)
 	char *deptype = (char *) sqlite3_column_text(query->ppStmt, 6);
 
 	/* we have a single char deptype */
-	dep->deptype = deptype[0];
+	dep->deptype = deptype != NULL ? deptype[0] : 'n';
 
 	if (sqlite3_column_type(query->ppStmt, 7) != SQLITE_NULL)
 	{

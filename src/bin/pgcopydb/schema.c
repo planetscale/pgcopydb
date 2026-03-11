@@ -3300,7 +3300,6 @@ schema_list_pg_depend(PGSQL *pgsql,
 		}
 
 		log_info("Extension dependencies fetched successfully");
-		return true;
 	}
 
 	log_debug("listSourceDependSQL[%s]", filterTypeToString(filters->type));
@@ -3337,6 +3336,365 @@ schema_list_pg_depend(PGSQL *pgsql,
 	{
 		log_error("Failed to list table dependencies");
 		return false;
+	}
+
+	/*
+	 * Cross-schema dependency filtering: detect objects in non-excluded
+	 * schemas that reference objects in excluded schemas. These must also
+	 * be filtered out to avoid pg_restore failures.
+	 *
+	 * These queries reference the filter_exclude_schema temp table created
+	 * by prepareFilters(). On read-only standbys, temp tables cannot be
+	 * created, so we skip these queries for now.
+	 */
+	if (filters->isReadOnly)
+	{
+		log_info("Skipping cross-schema dependency queries on read-only source");
+		return true;
+	}
+
+	/* Query 1: FK constraints referencing tables in excluded schemas */
+	if (filters->excludeSchemaList.count > 0)
+	{
+		char *fk_depend_sql =
+			"SELECT cn.nspname, cl.relname, "
+			"       'pg_class'::regclass::oid AS refclassid, "
+			"       confrelid AS refobjid, "
+			"       'pg_constraint'::regclass::oid AS classid, "
+			"       con.oid AS objid, "
+			"       'n' AS deptype, "
+			"       'constraint' AS type, "
+			"       cn.nspname || '.' || cl.relname || '.' || con.conname "
+			"           AS identity "
+			"  FROM pg_catalog.pg_constraint con "
+			"  JOIN pg_catalog.pg_class cl ON con.conrelid = cl.oid "
+			"  JOIN pg_catalog.pg_namespace cn ON cl.relnamespace = cn.oid "
+			"  JOIN pg_catalog.pg_class rcl ON con.confrelid = rcl.oid "
+			"  JOIN pg_catalog.pg_namespace rn ON rcl.relnamespace = rn.oid "
+			"  JOIN filter_exclude_schema es ON rn.nspname = es.nspname "
+			" WHERE con.contype = 'f' "
+			"   AND cn.nspname !~ '^pg_' "
+			"   AND cn.nspname <> 'information_schema' "
+			"   AND NOT EXISTS ("
+			"       SELECT 1 FROM filter_exclude_schema xs "
+			"        WHERE xs.nspname = cn.nspname)";
+
+		SourceDependArrayContext fkContext = { { 0 }, catalog, false };
+
+		log_info("Fetching FK constraints referencing excluded schemas");
+
+		if (!pgsql_execute_with_params(pgsql, fk_depend_sql,
+									   0, NULL, NULL,
+									   &fkContext, &getDependArray))
+		{
+			log_error("Failed to list FK cross-schema dependencies");
+			return false;
+		}
+
+		if (!fkContext.parsedOk)
+		{
+			log_error("Failed to parse FK cross-schema dependencies");
+			return false;
+		}
+	}
+
+	/* Query 2: Views that depend on objects in excluded schemas */
+	if (filters->excludeSchemaList.count > 0)
+	{
+		char *view_depend_sql =
+			"SELECT vn.nspname, vc.relname, "
+			"       d.refclassid, d.refobjid, "
+			"       'pg_class'::regclass::oid AS classid, "
+			"       vc.oid AS objid, "
+			"       d.deptype, "
+			"       'view' AS type, "
+			"       vn.nspname || '.' || vc.relname AS identity "
+			"  FROM pg_catalog.pg_depend d "
+			"  JOIN pg_catalog.pg_rewrite rw "
+			"    ON d.classid = 'pg_rewrite'::regclass "
+			"   AND d.objid = rw.oid "
+			"  JOIN pg_catalog.pg_class vc ON rw.ev_class = vc.oid "
+			"  JOIN pg_catalog.pg_namespace vn "
+			"    ON vc.relnamespace = vn.oid "
+			"  JOIN pg_catalog.pg_class rc "
+			"    ON d.refclassid = 'pg_class'::regclass "
+			"   AND d.refobjid = rc.oid "
+			"  JOIN pg_catalog.pg_namespace rn "
+			"    ON rc.relnamespace = rn.oid "
+			"  JOIN filter_exclude_schema es "
+			"    ON rn.nspname = es.nspname "
+			" WHERE vc.relkind IN ('v', 'm') "
+			"   AND vn.nspname !~ '^pg_' "
+			"   AND vn.nspname <> 'information_schema' "
+			"   AND NOT EXISTS ("
+			"       SELECT 1 FROM filter_exclude_schema xs "
+			"        WHERE xs.nspname = vn.nspname) "
+			" GROUP BY vn.nspname, vc.relname, d.refclassid, "
+			"          d.refobjid, vc.oid, d.deptype";
+
+		SourceDependArrayContext viewContext = { { 0 }, catalog, false };
+
+		log_info("Fetching views depending on excluded schemas");
+
+		if (!pgsql_execute_with_params(pgsql, view_depend_sql,
+									   0, NULL, NULL,
+									   &viewContext, &getDependArray))
+		{
+			log_error("Failed to list view cross-schema dependencies");
+			return false;
+		}
+
+		if (!viewContext.parsedOk)
+		{
+			log_error("Failed to parse view cross-schema dependencies");
+			return false;
+		}
+	}
+
+	/* Query 3: RLS policies that depend on excluded schemas */
+	if (filters->excludeSchemaList.count > 0)
+	{
+		char *policy_depend_sql =
+
+			/*
+			 * Find policies via pg_depend that reference objects
+			 * (functions, tables) in excluded schemas. Also use
+			 * text-based scanning of policy expressions as a
+			 * fallback for cases pg_depend doesn't track.
+			 */
+			"SELECT DISTINCT pn.nspname, pc.relname, "
+			"       d.refclassid, d.refobjid, "
+			"       'pg_policy'::regclass::oid AS classid, "
+			"       pol.oid AS objid, "
+			"       d.deptype, "
+			"       'policy' AS type, "
+			"       pn.nspname || '.' || pc.relname || '.' "
+			"           || pol.polname AS identity "
+			"  FROM pg_catalog.pg_policy pol "
+			"  JOIN pg_catalog.pg_class pc "
+			"    ON pol.polrelid = pc.oid "
+			"  JOIN pg_catalog.pg_namespace pn "
+			"    ON pc.relnamespace = pn.oid "
+			"  JOIN pg_catalog.pg_depend d "
+			"    ON d.classid = 'pg_policy'::regclass "
+			"   AND d.objid = pol.oid "
+			" WHERE pn.nspname !~ '^pg_' "
+			"   AND pn.nspname <> 'information_schema' "
+			"   AND NOT EXISTS ("
+			"       SELECT 1 FROM filter_exclude_schema xs "
+			"        WHERE xs.nspname = pn.nspname) "
+			"   AND ("
+			"     (d.refclassid = 'pg_proc'::regclass AND EXISTS ("
+			"       SELECT 1 FROM pg_catalog.pg_proc rp "
+			"       JOIN pg_catalog.pg_namespace rn "
+			"         ON rp.pronamespace = rn.oid "
+			"       JOIN filter_exclude_schema es "
+			"         ON rn.nspname = es.nspname "
+			"       WHERE rp.oid = d.refobjid)) "
+			"     OR "
+			"     (d.refclassid = 'pg_class'::regclass AND EXISTS ("
+			"       SELECT 1 FROM pg_catalog.pg_class rc "
+			"       JOIN pg_catalog.pg_namespace rn "
+			"         ON rc.relnamespace = rn.oid "
+			"       JOIN filter_exclude_schema es "
+			"         ON rn.nspname = es.nspname "
+			"       WHERE rc.oid = d.refobjid)) "
+			"   )";
+
+		SourceDependArrayContext polContext = { { 0 }, catalog, false };
+
+		log_info("Fetching RLS policies depending on excluded schemas");
+
+		if (!pgsql_execute_with_params(pgsql, policy_depend_sql,
+									   0, NULL, NULL,
+									   &polContext, &getDependArray))
+		{
+			log_error("Failed to list policy cross-schema dependencies");
+			return false;
+		}
+
+		if (!polContext.parsedOk)
+		{
+			log_error("Failed to parse policy cross-schema dependencies");
+			return false;
+		}
+	}
+
+	/* Query 5: Functions depending on excluded schemas */
+	if (filters->excludeSchemaList.count > 0)
+	{
+		char *func_depend_sql =
+			"SELECT fn.nspname, '' AS relname, "
+			"       d.refclassid, d.refobjid, "
+			"       'pg_proc'::regclass::oid AS classid, "
+			"       p.oid AS objid, "
+			"       d.deptype, "
+			"       'function' AS type, "
+			"       fn.nspname || '.' || p.proname AS identity "
+			"  FROM pg_catalog.pg_proc p "
+			"  JOIN pg_catalog.pg_namespace fn "
+			"    ON p.pronamespace = fn.oid "
+			"  JOIN pg_catalog.pg_depend d "
+			"    ON d.classid = 'pg_proc'::regclass "
+			"   AND d.objid = p.oid "
+			" WHERE fn.nspname !~ '^pg_' "
+			"   AND fn.nspname <> 'information_schema' "
+			"   AND NOT EXISTS ("
+			"       SELECT 1 FROM filter_exclude_schema xs "
+			"        WHERE xs.nspname = fn.nspname) "
+			"   AND NOT EXISTS ("
+			"       SELECT 1 FROM pg_depend ed "
+			"        WHERE ed.objid = p.oid "
+			"          AND ed.deptype = 'e') "
+			"   AND ("
+			"     (d.refclassid = 'pg_proc'::regclass AND EXISTS ("
+			"       SELECT 1 FROM pg_catalog.pg_proc rp "
+			"       JOIN pg_catalog.pg_namespace rn "
+			"         ON rp.pronamespace = rn.oid "
+			"       JOIN filter_exclude_schema es "
+			"         ON rn.nspname = es.nspname "
+			"       WHERE rp.oid = d.refobjid)) "
+			"     OR "
+			"     (d.refclassid = 'pg_class'::regclass AND EXISTS ("
+			"       SELECT 1 FROM pg_catalog.pg_class rc "
+			"       JOIN pg_catalog.pg_namespace rn "
+			"         ON rc.relnamespace = rn.oid "
+			"       JOIN filter_exclude_schema es "
+			"         ON rn.nspname = es.nspname "
+			"       WHERE rc.oid = d.refobjid)) "
+			"     OR "
+			"     (d.refclassid = 'pg_namespace'::regclass AND EXISTS ("
+			"       SELECT 1 FROM filter_exclude_schema es "
+			"       JOIN pg_catalog.pg_namespace rn "
+			"         ON rn.nspname = es.nspname "
+			"       WHERE rn.oid = d.refobjid)) "
+			"   ) "
+			" GROUP BY fn.nspname, p.oid, p.proname, "
+			"          d.refclassid, d.refobjid, d.deptype";
+
+		SourceDependArrayContext funcContext = { { 0 }, catalog, false };
+
+		log_info("Fetching functions depending on excluded schemas");
+
+		if (!pgsql_execute_with_params(pgsql, func_depend_sql,
+									   0, NULL, NULL,
+									   &funcContext, &getDependArray))
+		{
+			log_error("Failed to list function cross-schema dependencies");
+			return false;
+		}
+
+		if (!funcContext.parsedOk)
+		{
+			log_error("Failed to parse function cross-schema dependencies");
+			return false;
+		}
+	}
+
+	/* Query 4: Event trigger backing functions */
+	if (filters->excludeEventTriggerList.count > 0)
+	{
+		/*
+		 * Build a VALUES clause from the event trigger names since
+		 * there is no temp table for event triggers in prepareFilters.
+		 */
+		PQExpBuffer buf = createPQExpBuffer();
+
+		appendPQExpBufferStr(buf,
+							 "SELECT pn.nspname, '' AS relname, "
+							 "       'pg_event_trigger'::regclass::oid AS refclassid, "
+							 "       evt.oid AS refobjid, "
+							 "       'pg_proc'::regclass::oid AS classid, "
+							 "       p.oid AS objid, "
+							 "       'n' AS deptype, "
+							 "       'function' AS type, "
+							 "       pn.nspname || '.' || p.proname AS identity "
+							 "  FROM pg_catalog.pg_event_trigger evt "
+							 "  JOIN pg_catalog.pg_proc p ON evt.evtfoid = p.oid "
+							 "  JOIN pg_catalog.pg_namespace pn "
+							 "    ON p.pronamespace = pn.oid "
+							 " WHERE evt.evtname IN (");
+
+		for (int i = 0; i < filters->excludeEventTriggerList.count; i++)
+		{
+			if (i > 0)
+			{
+				appendPQExpBufferStr(buf, ", ");
+			}
+
+			char *name =
+				filters->excludeEventTriggerList.array[i].evtname;
+
+			char *escaped =
+				PQescapeLiteral(pgsql->connection,
+								name, strlen(name));
+
+			if (escaped == NULL)
+			{
+				log_error("Failed to escape event trigger name: %s",
+						  PQerrorMessage(pgsql->connection));
+				destroyPQExpBuffer(buf);
+				return false;
+			}
+
+			appendPQExpBufferStr(buf, escaped);
+			PQfreemem(escaped);
+		}
+
+		appendPQExpBufferStr(buf, ")"
+								  " AND NOT EXISTS ("
+								  "   SELECT 1 FROM pg_catalog.pg_event_trigger other "
+								  "    WHERE other.evtfoid = p.oid "
+								  "      AND other.evtname NOT IN (");
+
+		for (int i = 0; i < filters->excludeEventTriggerList.count; i++)
+		{
+			if (i > 0)
+			{
+				appendPQExpBufferStr(buf, ", ");
+			}
+
+			char *name2 =
+				filters->excludeEventTriggerList.array[i].evtname;
+
+			char *escaped2 =
+				PQescapeLiteral(pgsql->connection,
+								name2, strlen(name2));
+
+			if (escaped2 == NULL)
+			{
+				log_error("Failed to escape event trigger name: %s",
+						  PQerrorMessage(pgsql->connection));
+				destroyPQExpBuffer(buf);
+				return false;
+			}
+
+			appendPQExpBufferStr(buf, escaped2);
+			PQfreemem(escaped2);
+		}
+
+		appendPQExpBufferStr(buf, "))");
+
+		SourceDependArrayContext evtContext = { { 0 }, catalog, false };
+
+		log_info("Fetching event trigger backing functions");
+
+		if (!pgsql_execute_with_params(pgsql, buf->data,
+									   0, NULL, NULL,
+									   &evtContext, &getDependArray))
+		{
+			log_error("Failed to list event trigger function dependencies");
+			destroyPQExpBuffer(buf);
+			return false;
+		}
+
+		destroyPQExpBuffer(buf);
+
+		if (!evtContext.parsedOk)
+		{
+			log_error("Failed to parse event trigger function dependencies");
+			return false;
+		}
 	}
 
 	return true;

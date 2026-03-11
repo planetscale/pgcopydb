@@ -132,3 +132,44 @@ $$;
 
 create event trigger evt_keep on ddl_command_end execute function foo.evt_trigger_func();
 create event trigger evt_exclude on ddl_command_start execute function foo.evt_trigger_func();
+
+--
+-- To test cross-schema dependency filtering
+-- Objects in non-excluded schemas that reference excluded schemas
+-- should have their cross-schema dependencies filtered out
+--
+create schema excluded_test;
+
+create table excluded_test.users (
+    id bigserial primary key,
+    email text
+);
+
+insert into excluded_test.users (id, email) values (1, 'test@example.com');
+
+create or replace function excluded_test.get_uid()
+returns bigint language sql stable as $$ select 1::bigint; $$;
+
+-- Table in foo schema with FK referencing excluded schema
+create table foo.tbl_with_cross_fk (
+    id bigserial primary key,
+    user_id bigint references excluded_test.users(id)
+);
+
+insert into foo.tbl_with_cross_fk (id, user_id) values (1, 1);
+
+-- View in foo schema referencing excluded schema
+create view foo.cross_schema_view as select * from excluded_test.users;
+
+-- Table in foo schema with RLS policy referencing excluded schema function
+create table foo.tbl_with_cross_rls (
+    id bigserial primary key,
+    owner_id bigint
+);
+
+insert into foo.tbl_with_cross_rls (id, owner_id) values (1, 1);
+
+alter table foo.tbl_with_cross_rls enable row level security;
+
+create policy cross_schema_policy on foo.tbl_with_cross_rls
+    using (owner_id = excluded_test.get_uid());
