@@ -40,13 +40,6 @@
 #include "runprogram.h"
 
 /*
- * Maximum number of ignored errors from pg_restore that we'll tolerate.
- * If pg_restore reports "errors ignored on restore: N" where N <= this, we continue.
- */
-#define MAX_TOLERATED_RESTORE_ERRORS 10
-
-
-/*
  * Get psql --version output in pgPaths->pg_version.
  */
 bool
@@ -1055,11 +1048,11 @@ pg_restore_db(PostgresPaths *pgPaths,
 		 */
 		int ignoredErrors = get_and_reset_ignored_restore_errors();
 
-		if (ignoredErrors > 0 && ignoredErrors <= MAX_TOLERATED_RESTORE_ERRORS)
+		if (ignoredErrors > 0 && ignoredErrors <= options.restoreTolerance)
 		{
 			log_warn(
 				"pg_restore exited with code %d but reported %d ignored errors (within tolerance of %d)",
-				program.returnCode, ignoredErrors, MAX_TOLERATED_RESTORE_ERRORS);
+				program.returnCode, ignoredErrors, options.restoreTolerance);
 			log_warn(
 				"Continuing despite pg_restore errors - please verify schema integrity");
 			return true;
@@ -1069,7 +1062,7 @@ pg_restore_db(PostgresPaths *pgPaths,
 			"Failed to run pg_restore: exit code %d (ignored errors: %d, tolerance: %d)",
 			program.returnCode,
 			ignoredErrors,
-			MAX_TOLERATED_RESTORE_ERRORS);
+			options.restoreTolerance);
 
 		return false;
 	}
