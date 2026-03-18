@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     container: citus/stylechecker:no-py
     steps:
-    - uses: actions/checkout@v4.1.7
+    - uses: actions/checkout@v6
       name: Checkout code
 
     - name: Set safe directory for git
@@ -40,7 +40,7 @@ jobs:
     name: Check for banned APIs
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
     - name: Check for banned APIs
       run: sh ./ci/banned.h.sh
@@ -50,7 +50,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Build docs
         uses: ammaraskar/sphinx-action@master
@@ -88,7 +88,7 @@ jobs:
           - unit
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -155,7 +155,7 @@ jobs:
           - endpos-in-multi-wal-txn
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
