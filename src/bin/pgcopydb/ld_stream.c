@@ -2388,12 +2388,33 @@ stream_cleanup_databases(CopyDataSpec *copySpecs, char *slotName, char *origin)
 		return false;
 	}
 
-	log_info("Removing schema pgcopydb and its objects");
+	/*
+	 * On a read-only standby we cannot execute DDL statements, so skip
+	 * dropping the pgcopydb schema.
+	 */
+	bool sourceIsReadOnly = false;
 
-	if (!pgsql_execute(&src, "drop schema if exists pgcopydb cascade"))
+	if (!pgsql_is_in_recovery(&src, &sourceIsReadOnly))
 	{
-		/* errors have already been logged */
+		log_error("Failed to check if source is in recovery");
+		pgsql_finish(&src);
 		return false;
+	}
+
+	if (sourceIsReadOnly)
+	{
+		log_info("Skipping DROP SCHEMA pgcopydb on read-only standby");
+	}
+	else
+	{
+		log_info("Removing schema pgcopydb and its objects");
+
+		if (!pgsql_execute(&src, "drop schema if exists pgcopydb cascade"))
+		{
+			/* errors have already been logged */
+			pgsql_finish(&src);
+			return false;
+		}
 	}
 
 	if (!pgsql_commit(&src))

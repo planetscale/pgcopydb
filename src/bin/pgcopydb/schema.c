@@ -703,7 +703,7 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 		"    from pg_catalog.pg_class c"
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid"
 
-		"   where relkind = 'r' and c.relpersistence in ('p', 'u') "
+		"   where relkind = 'r' and c.relpersistence in ('p', 'u') AND (c.relpersistence != 'u' OR NOT pg_is_in_recovery()) "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 
 		/* avoid pg_class entries which belong to extensions */
@@ -730,7 +730,7 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 		"           on n.nspname = inc.nspname "
 		"          and c.relname = inc.relname "
 
-		"   where relkind = 'r' and c.relpersistence in ('p', 'u') "
+		"   where relkind = 'r' and c.relpersistence in ('p', 'u') AND (c.relpersistence != 'u' OR NOT pg_is_in_recovery()) "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 
 		/* avoid pg_class entries which belong to extensions */
@@ -766,7 +766,7 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 		"                on n.nspname = ftd.nspname "
 		"               and c.relname = ftd.relname "
 
-		"   where relkind = 'r' and c.relpersistence in ('p', 'u') "
+		"   where relkind = 'r' and c.relpersistence in ('p', 'u') AND (c.relpersistence != 'u' OR NOT pg_is_in_recovery()) "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 
 		/* WHERE clause for exclusion filters */
@@ -798,7 +798,7 @@ struct FilteringQueries listSourceTableSizeSQL[] = {
 		"           on n.nspname = inc.nspname "
 		"          and c.relname = inc.relname "
 
-		"   where relkind in ('r', 'p') and c.relpersistence in ('p', 'u') "
+		"   where relkind in ('r', 'p') and c.relpersistence in ('p', 'u') AND (c.relpersistence != 'u' OR NOT pg_is_in_recovery()) "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 
 		/* WHERE clause for exclusion filters */
@@ -1004,7 +1004,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"              limit 1"
 		"         ) as pkeys on true"
 
-		"   where relkind in ('r', 'm') and c.relpersistence in ('p', 'u') "
+		"   where relkind in ('r', 'm') and c.relpersistence in ('p', 'u') AND (c.relpersistence != 'u' OR NOT pg_is_in_recovery()) "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and n.nspname !~ 'pgcopydb' "
 
@@ -1096,7 +1096,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"              limit 1"
 		"         ) as pkeys on true"
 
-		"   where relkind in ('r', 'm') and c.relpersistence in ('p', 'u') "
+		"   where relkind in ('r', 'm') and c.relpersistence in ('p', 'u') AND (c.relpersistence != 'u' OR NOT pg_is_in_recovery()) "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and n.nspname !~ 'pgcopydb' "
 
@@ -1194,7 +1194,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"              limit 1"
 		"         ) as pkeys on true"
 
-		"   where relkind in ('r', 'm') and c.relpersistence in ('p', 'u') "
+		"   where relkind in ('r', 'm') and c.relpersistence in ('p', 'u') AND (c.relpersistence != 'u' OR NOT pg_is_in_recovery()) "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and n.nspname !~ 'pgcopydb' "
 
@@ -1287,7 +1287,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"              limit 1"
 		"         ) as pkeys on true"
 
-		"   where relkind in ('r', 'p', 'm') and c.relpersistence in ('p', 'u') "
+		"   where relkind in ('r', 'p', 'm') and c.relpersistence in ('p', 'u') AND (c.relpersistence != 'u' OR NOT pg_is_in_recovery()) "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and n.nspname !~ 'pgcopydb' "
 
@@ -1383,7 +1383,7 @@ struct FilteringQueries listSourceTablesSQL[] = {
 		"              limit 1"
 		"         ) as pkeys on true"
 
-		"   where relkind in ('r', 'p', 'm') and c.relpersistence in ('p', 'u') "
+		"   where relkind in ('r', 'p', 'm') and c.relpersistence in ('p', 'u') AND (c.relpersistence != 'u' OR NOT pg_is_in_recovery()) "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and n.nspname !~ 'pgcopydb' "
 
@@ -1525,7 +1525,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"         left join pg_catalog.pg_am on c.relam = pg_am.oid"
 		"         join pg_roles auth ON auth.oid = c.relowner"
 
-		"   where c.relkind in ('r', 'm') and c.relpersistence in ('p', 'u')  "
+		"   where c.relkind in ('r', 'm') and c.relpersistence in ('p', 'u') AND (c.relpersistence != 'u' OR NOT pg_is_in_recovery())  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and not exists "
 		"         ( "
@@ -1576,7 +1576,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"           on n.nspname = inc.nspname "
 		"          and c.relname = inc.relname "
 
-		"   where c.relkind in ('r', 'm') and c.relpersistence in ('p', 'u') "
+		"   where c.relkind in ('r', 'm') and c.relpersistence in ('p', 'u') AND (c.relpersistence != 'u' OR NOT pg_is_in_recovery()) "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and not exists "
 		"         ( "
@@ -1636,7 +1636,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"                on n.nspname = ftd.nspname "
 		"               and c.relname = ftd.relname "
 
-		"   where c.relkind in ('r', 'm') and c.relpersistence in ('p', 'u')  "
+		"   where c.relkind in ('r', 'm') and c.relpersistence in ('p', 'u') AND (c.relpersistence != 'u' OR NOT pg_is_in_recovery())  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and not exists "
 		"         ( "
@@ -1691,7 +1691,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"           on n.nspname = inc.nspname "
 		"          and c.relname = inc.relname "
 
-		"   where c.relkind in ('r', 'm') and c.relpersistence in ('p', 'u')  "
+		"   where c.relkind in ('r', 'm') and c.relpersistence in ('p', 'u') AND (c.relpersistence != 'u' OR NOT pg_is_in_recovery())  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and not exists "
 		"         ( "
@@ -1749,7 +1749,7 @@ struct FilteringQueries listSourceTablesNoPKSQL[] = {
 		"                on n.nspname = ft.nspname "
 		"               and c.relname = ft.relname "
 
-		"   where c.relkind in ('r', 'm') and c.relpersistence in ('p', 'u')  "
+		"   where c.relkind in ('r', 'm') and c.relpersistence in ('p', 'u') AND (c.relpersistence != 'u' OR NOT pg_is_in_recovery())  "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and not exists "
 		"         ( "
@@ -1799,7 +1799,7 @@ struct FilteringQueries listSourceSequencesSQL[] = {
 		"         join pg_catalog.pg_namespace n on c.relnamespace = n.oid "
 		"         join pg_roles auth ON auth.oid = c.relowner"
 
-		"   where c.relkind = 'S' and c.relpersistence in ('p', 'u') "
+		"   where c.relkind = 'S' and c.relpersistence in ('p', 'u') AND (c.relpersistence != 'u' OR NOT pg_is_in_recovery()) "
 		"     and n.nspname !~ '^pg_' and n.nspname <> 'information_schema' "
 		"     and n.nspname !~ 'pgcopydb' "
 
@@ -2474,7 +2474,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"                and d.deptype = 'i'"
 		"          left join pg_constraint c ON c.oid = d.refobjid"
 
-		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') "
+		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') AND (r.relpersistence != 'u' OR NOT pg_is_in_recovery()) "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 		"      and n.nspname !~ 'pgcopydb' "
 
@@ -2541,7 +2541,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"                on n.nspname = fei.nspname "
 		"               and i.relname = fei.relname "
 
-		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') "
+		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') AND (r.relpersistence != 'u' OR NOT pg_is_in_recovery()) "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 		"      and n.nspname !~ 'pgcopydb' "
 
@@ -2620,7 +2620,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"                on n.nspname = fei.nspname "
 		"               and i.relname = fei.relname "
 
-		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') "
+		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') AND (r.relpersistence != 'u' OR NOT pg_is_in_recovery()) "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 		"      and n.nspname !~ 'pgcopydb' "
 
@@ -2693,7 +2693,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"           on n.nspname = fei.nspname "
 		"          and i.relname = fei.relname "
 
-		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') "
+		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') AND (r.relpersistence != 'u' OR NOT pg_is_in_recovery()) "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 		"      and n.nspname !~ 'pgcopydb' "
 
@@ -2769,7 +2769,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"                on n.nspname = fei.nspname "
 		"               and i.relname = fei.relname "
 
-		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') "
+		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') AND (r.relpersistence != 'u' OR NOT pg_is_in_recovery()) "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 		"      and n.nspname !~ 'pgcopydb' "
 
@@ -2836,7 +2836,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"                 on n.nspname = ft.nspname "
 		"                and i.relname = ft.relname "
 
-		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') "
+		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') AND (r.relpersistence != 'u' OR NOT pg_is_in_recovery()) "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 		"      and n.nspname !~ 'pgcopydb' "
 
@@ -2901,7 +2901,7 @@ struct FilteringQueries listSourceIndexesSQL[] = {
 		"                 on n.nspname = ft.nspname "
 		"                and i.relname = ft.relname "
 
-		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') "
+		"    where r.relkind = 'r' and r.relpersistence in ('p', 'u') AND (r.relpersistence != 'u' OR NOT pg_is_in_recovery()) "
 		"      and n.nspname !~ '^pg_' and n.nspname <> 'information_schema'"
 		"      and n.nspname !~ 'pgcopydb' "
 

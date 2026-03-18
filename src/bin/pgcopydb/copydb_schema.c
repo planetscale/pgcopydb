@@ -711,8 +711,8 @@ copydb_prepare_table_specs(CopyDataSpec *specs, PGSQL *pgsql)
 	/* if we're estimating table sizes, we need statistics */
 	if (specs->estimateTableSizes)
 	{
-		/* if --skip-analyze was used, we assume the user updated the statistics */
-		if (specs->skipAnalyze)
+		/* if --skip-analyze was used, or on a read-only standby, skip ANALYZE */
+		if (specs->skipAnalyze || specs->sourceSnapshot.isReadOnly)
 		{
 			log_info("Skipping vacuumdb --analyze-only on source database "
 					 "before calculating table size estimates");
@@ -851,19 +851,7 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 	 * When the Table Access Method used is not "heap" we don't know if the
 	 * CTID range scan is supported (see columnar storage extensions), so
 	 * we skip partitioning altogether in that case.
-	 *
-	 * Also, we cannot execute ANALYZE on a database that is in recovery mode,
-	 * so we skip partitioning in that case too.
 	 */
-
-	if (specs->sourceSnapshot.isReadOnly)
-	{
-		log_warn("Connected to a standby server where pg_is_in_recovery(): "
-				 "skipping partitioning for table %s",
-				 source->qname);
-
-		return true;
-	}
 
 	if (IS_EMPTY_STRING_BUFFER(source->partKey) &&
 		streq(source->amname, "heap"))
@@ -895,8 +883,10 @@ copydb_prepare_table_specs_hook(void *ctx, SourceTable *source)
 		/*
 		 * Make sure we have proper statistics (relpages) about the table
 		 * before compute the CTID ranges for the concurrent table scans.
+		 * On read-only standbys we use existing pg_class stats instead of
+		 * running ANALYZE.
 		 */
-		if (specs->estimateTableSizes)
+		if (specs->estimateTableSizes || specs->sourceSnapshot.isReadOnly)
 		{
 			log_debug("Skipping running ANALYZE on table %s for CTID split",
 					  source->qname);

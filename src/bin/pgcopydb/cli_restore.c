@@ -180,13 +180,13 @@ cli_restore_schema_getopts(int argc, char **argv)
 		{ "resume", no_argument, NULL, 'R' },
 		{ "not-consistent", no_argument, NULL, 'C' },
 		{ "snapshot", required_argument, NULL, 'N' },
-		{ "restore-tolerance", required_argument, NULL, 256 },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "notice", no_argument, NULL, 'v' },
 		{ "debug", no_argument, NULL, 'd' },
 		{ "trace", no_argument, NULL, 'z' },
 		{ "quiet", no_argument, NULL, 'q' },
+		{ "restore-tolerance", required_argument, NULL, 256 },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
 	};
