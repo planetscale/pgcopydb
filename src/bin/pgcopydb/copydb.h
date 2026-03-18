@@ -233,6 +233,7 @@ typedef struct CopyDataSpec
 	bool skipCtidSplit;
 	bool noRolesPasswords;
 	bool useCopyBinary;
+	bool skipXidCheck;
 
 	bool restart;
 	bool resume;

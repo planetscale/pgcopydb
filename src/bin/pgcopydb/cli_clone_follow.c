@@ -54,6 +54,7 @@
 	"  --skip-split-by-ctid          Skip spliting tables by ctid\n" \
 	"  --requirements <filename>     List extensions requirements\n" \
 	"  --filters <filename>          Use the filters defined in <filename>\n" \
+	"  --skip-xid-check             Skip the XID wraparound proximity check\n" \
 	"  --fail-fast                   Abort early in case of error\n" \
 	"  --restart                     Allow restarting when temp files exist already\n" \
 	"  --resume                      Allow resuming operations after a failure\n" \
@@ -118,7 +119,8 @@ static bool start_follow_process(CopyDataSpec *copySpecs,
 								 StreamSpecs *streamSpecs,
 								 pid_t *pid);
 
-static bool cli_clone_follow_wait_subprocess(const char *name, pid_t pid);
+static bool cli_clone_follow_wait_subprocess(const char *name, pid_t pid,
+											 CopyDataSpec *copySpecs);
 
 static bool cloneDB(CopyDataSpec *copySpecs);
 
@@ -169,13 +171,18 @@ cli_clone(int argc, char **argv)
 	}
 
 	/* wait until the clone process is finished */
-	bool success = cli_clone_follow_wait_subprocess("clone", clonePID);
+	bool success =
+		cli_clone_follow_wait_subprocess("clone", clonePID, &copySpecs);
 
 	/* close our top-level copy db connection and snapshot */
-	if (exportSnapshot && !copydb_close_snapshot(&copySpecs))
+	if (exportSnapshot &&
+		copySpecs.sourceSnapshot.state != SNAPSHOT_STATE_CLOSED)
 	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
+		if (!copydb_close_snapshot(&copySpecs))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_SOURCE);
+		}
 	}
 
 	/* make sure all sub-processes are now finished */
@@ -296,13 +303,16 @@ clone_and_follow(CopyDataSpec *copySpecs)
 
 	/* wait until the clone process is finished */
 	bool success =
-		cli_clone_follow_wait_subprocess("clone", clonePID);
+		cli_clone_follow_wait_subprocess("clone", clonePID, copySpecs);
 
 	/* close our top-level copy db connection and snapshot */
-	if (!copydb_close_snapshot(copySpecs))
+	if (copySpecs->sourceSnapshot.state != SNAPSHOT_STATE_CLOSED)
 	{
-		/* errors have already been logged */
-		exit(EXIT_CODE_SOURCE);
+		if (!copydb_close_snapshot(copySpecs))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_SOURCE);
+		}
 	}
 
 	/*
@@ -328,7 +338,7 @@ clone_and_follow(CopyDataSpec *copySpecs)
 	if (followPID != -1)
 	{
 		success = success &&
-				  cli_clone_follow_wait_subprocess("follow", followPID);
+				  cli_clone_follow_wait_subprocess("follow", followPID, NULL);
 	}
 
 	/*
@@ -609,6 +619,15 @@ cloneDB(CopyDataSpec *copySpecs)
 		return false;
 	}
 
+	/* Signal parent that snapshot-dependent work is complete */
+	if (!summary_start_timing(sourceDB, TIMING_SECTION_SNAPSHOT_DONE) ||
+		!summary_stop_timing(sourceDB, TIMING_SECTION_SNAPSHOT_DONE))
+	{
+		log_warn("Failed to write snapshot-done signal");
+
+		/* Non-fatal: parent falls back to closing snapshot after clone exits */
+	}
+
 	log_info("STEP 10: restore the post-data section to the target database");
 
 	if (!copydb_target_finalize_schema(copySpecs))
@@ -734,11 +753,14 @@ start_follow_process(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs,
  * finished.
  */
 static bool
-cli_clone_follow_wait_subprocess(const char *name, pid_t pid)
+cli_clone_follow_wait_subprocess(const char *name, pid_t pid,
+								 CopyDataSpec *copySpecs)
 {
 	bool exited = false;
 	int returnCode = -1;
 	int sig = 0;
+	bool snapshotClosed = (copySpecs == NULL);
+	bool catalogOpenedHere = false;
 
 	if (pid < 0)
 	{
@@ -774,8 +796,57 @@ cli_clone_follow_wait_subprocess(const char *name, pid_t pid)
 					  details);
 		}
 
+		/*
+		 * Poll the catalog for the snapshot-done signal written by the
+		 * clone child after all snapshot-dependent work (COPY + blobs)
+		 * finishes.  Release the source snapshot early so vacuum can
+		 * proceed while indexes/constraints are built on the target.
+		 */
+		if (!snapshotClosed)
+		{
+			DatabaseCatalog *sourceDB = &(copySpecs->catalogs.source);
+
+			if (sourceDB->db == NULL && file_exists(sourceDB->dbfile))
+			{
+				if (catalog_init(sourceDB))
+				{
+					catalogOpenedHere = true;
+				}
+			}
+
+			if (sourceDB->db != NULL)
+			{
+				TopLevelTiming timing = { 0 };
+
+				if (summary_lookup_timing(sourceDB, &timing,
+										  TIMING_SECTION_SNAPSHOT_DONE) &&
+					timing.doneTime > 0)
+				{
+					if (copydb_close_snapshot(copySpecs))
+					{
+						snapshotClosed = true;
+						log_info("Source snapshot released: "
+								 "all snapshot-dependent work is complete");
+					}
+					else
+					{
+						log_warn("Failed to release snapshot early, "
+								 "will close after clone completes");
+						snapshotClosed = true;
+					}
+				}
+			}
+		}
+
 		/* avoid busy looping, wait for 150ms before checking again */
 		pg_usleep(150 * 1000);
+	}
+
+	if (catalogOpenedHere)
+	{
+		DatabaseCatalog *sourceDB = &(copySpecs->catalogs.source);
+
+		(void) catalog_close(sourceDB);
 	}
 
 	return returnCode == 0 && signal_is_handled(sig);

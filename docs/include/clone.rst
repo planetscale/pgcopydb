@@ -31,6 +31,7 @@
      --skip-split-by-ctid          Skip spliting tables by ctid
      --requirements <filename>     List extensions requirements
      --filters <filename>          Use the filters defined in <filename>
+     --skip-xid-check             Skip the XID wraparound proximity check
      --fail-fast                   Abort early in case of error
      --restart                     Allow restarting when temp files exist already
      --resume                      Allow resuming operations after a failure
