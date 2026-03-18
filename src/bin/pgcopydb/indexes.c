@@ -23,7 +23,7 @@
 
 
 static bool copydb_add_table_indexes_hook(void *context, SourceIndex *index);
-static bool copydb_create_constraints_hook(void *context, SourceIndex *index);
+static bool copydb_collect_constraint_indexes_hook(void *ctx, SourceIndex *index);
 static bool copydb_copy_all_indexes_hook(void *ctx, SourceIndex *index);
 
 
@@ -1068,20 +1068,23 @@ copydb_prepare_create_constraint_command(CopyIndexSpec *indexSpecs)
 }
 
 
-typedef struct CreateConstraintsContext
-{
-	CopyDataSpec *specs;
-	PGSQL *dst;
-} CreateConstraintsContext;
-
 /*
  * copydb_create_constraints loops over the index definitions for a given table
  * and creates all the associated constraints, one after the other.
+ *
+ * We use a collect-then-execute pattern here: first we iterate over the source
+ * catalog (which holds the catalog semaphore) and collect constraint indexes
+ * into an in-memory array. Then, after the iterator returns and the semaphore
+ * is released, we create each constraint. This avoids holding the catalog
+ * semaphore during potentially long-running ALTER TABLE ... ADD CONSTRAINT
+ * commands on the target database, which would block all other workers.
+ *
+ * This is the same pattern used in copydb_add_table_indexes().
  */
 bool
 copydb_create_constraints(CopyDataSpec *specs, PGSQL *dst, SourceTable *table)
 {
-	int errors = 0;
+	bool success = true;
 
 	/*
 	 * Postgres doesn't implement ALTER TABLE ... ADD CONSTRAINT ... IF NOT
@@ -1133,119 +1136,162 @@ copydb_create_constraints(CopyDataSpec *specs, PGSQL *dst, SourceTable *table)
 
 
 	/*
-	 * Now iterate over the source database catalog list of indexes attached to
-	 * the current table, and install indexes/constraints on that same table on
-	 * the target database, skipping constraints that already exists on the
-	 * target catalog.
+	 * Phase 1: Collect constraint indexes while holding the catalog semaphore.
+	 *
+	 * The catalog_iter_s_index_table() function acquires the source catalog
+	 * semaphore for the duration of the iteration. We only do fast in-memory
+	 * copies here so the semaphore is held briefly.
 	 */
 	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
 
-	CreateConstraintsContext context = {
-		.specs = specs,
-		.dst = dst
-	};
+	SourceIndexArray indexArray = { 0, 0, NULL };
 
 	if (!catalog_iter_s_index_table(sourceDB,
 									table->nspname,
 									table->relname,
-									&context,
-									&copydb_create_constraints_hook))
+									&indexArray,
+									&copydb_collect_constraint_indexes_hook))
 	{
 		/* errors have already been logged */
+		free(indexArray.array);
 		return false;
 	}
 
-	return errors == 0;
+	/*
+	 * Phase 2: Create constraints without holding the catalog semaphore.
+	 *
+	 * Now iterate over the collected array and run ALTER TABLE ... ADD
+	 * CONSTRAINT on the target database. These commands may be slow (e.g.
+	 * EXCLUDE USING gist on a large table), but other workers can freely
+	 * access the source catalog while we wait.
+	 */
+	for (int i = 0; i < indexArray.count; i++)
+	{
+		SourceIndex *index = &(indexArray.array[i]);
+
+		CopyIndexSpec indexSpecs = { .sourceIndex = index };
+		CopyIndexSummary *indexSummary = &(indexSpecs.summary);
+
+		if (!copydb_prepare_create_constraint_command(&indexSpecs))
+		{
+			log_warn("Failed to prepare SQL command to create "
+					 "constraint \"%s\"",
+					 index->constraintName);
+			success = false;
+			break;
+		}
+
+		if (!summary_add_constraint(sourceDB, &indexSpecs))
+		{
+			/* errors have already been logged */
+			success = false;
+			break;
+		}
+
+		/* skip constraints that already exist on the target database */
+		SourceIndex *targetIndex =
+			(SourceIndex *) calloc(1, sizeof(SourceIndex));
+
+		if (targetIndex == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			success = false;
+			break;
+		}
+
+		if (!catalog_lookup_s_index_by_name(targetDB,
+											index->indexNamespace,
+											index->indexRelname,
+											targetIndex))
+		{
+			/* errors have already been logged */
+			success = false;
+			break;
+		}
+
+		bool foundConstraintOnTarget =
+			streq(index->constraintName, targetIndex->constraintName);
+
+		if (!foundConstraintOnTarget)
+		{
+			log_notice("%s", indexSummary->command);
+
+			/*
+			 * Constraints are built by the CREATE INDEX worker process that
+			 * is the last one to finish an index for a given table. We do
+			 * not have to care about concurrency here: no semaphore locking.
+			 */
+			if (!pgsql_execute(dst, indexSummary->command))
+			{
+				/* errors have already been logged */
+				success = false;
+				break;
+			}
+		}
+
+		if (!summary_finish_constraint(sourceDB, &indexSpecs))
+		{
+			/* errors have already been logged */
+			success = false;
+			break;
+		}
+
+		if (!summary_increment_timing(sourceDB,
+									  TIMING_SECTION_ALTER_TABLE,
+									  1, /* count */
+									  0, /* bytes */
+									  indexSpecs.summary.durationMs))
+		{
+			/* errors have already been logged */
+			success = false;
+			break;
+		}
+	}
+
+	free(indexArray.array);
+
+	return success;
 }
 
 
 /*
- * copydb_create_constraints_hook is an iterator callback function.
+ * copydb_collect_constraint_indexes_hook is an iterator callback function that
+ * collects indexes with constraints into a SourceIndexArray. This callback runs
+ * while the catalog semaphore is held, so it only does fast in-memory copies.
  */
 static bool
-copydb_create_constraints_hook(void *ctx, SourceIndex *index)
+copydb_collect_constraint_indexes_hook(void *ctx, SourceIndex *index)
 {
-	CreateConstraintsContext *context = (CreateConstraintsContext *) ctx;
-	CopyDataSpec *specs = context->specs;
+	SourceIndexArray *indexArray = (SourceIndexArray *) ctx;
 
-	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
-	DatabaseCatalog *targetDB = &(specs->catalogs.target);
-
-	/* some indexes are not attached to a constraint at all */
+	/* skip indexes that are not attached to a constraint */
 	if (index->constraintOid == 0 ||
 		IS_EMPTY_STRING_BUFFER(index->constraintName))
 	{
 		return true;
 	}
 
-	CopyIndexSpec indexSpecs = { .sourceIndex = index };
-	CopyIndexSummary *indexSummary = &(indexSpecs.summary);
-
-	if (!copydb_prepare_create_constraint_command(&indexSpecs))
+	/* grow the array if needed */
+	if (indexArray->count >= indexArray->capacity)
 	{
-		log_warn("Failed to prepare SQL command to create constraint \"%s\"",
-				 index->constraintName);
-		return false;
-	}
+		int newCap = indexArray->capacity == 0 ? 8 : indexArray->capacity * 2;
+		SourceIndex *newArray =
+			(SourceIndex *) realloc(indexArray->array,
+									newCap * sizeof(SourceIndex));
 
-	if (!summary_add_constraint(sourceDB, &indexSpecs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* skip constraints that already exist on the target database */
-	SourceIndex *targetIndex = (SourceIndex *) calloc(1, sizeof(SourceIndex));
-
-	if (targetIndex == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
-	if (!catalog_lookup_s_index_by_name(targetDB,
-										index->indexNamespace,
-										index->indexRelname,
-										targetIndex))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	bool foundConstraintOnTarget =
-		streq(index->constraintName, targetIndex->constraintName);
-
-	if (!foundConstraintOnTarget)
-	{
-		log_notice("%s", indexSummary->command);
-
-		/*
-		 * Constraints are built by the CREATE INDEX worker process that is
-		 * the last one to finish an index for a given table. We do not
-		 * have to care about concurrency here: no semaphore locking.
-		 */
-		if (!pgsql_execute(context->dst, indexSummary->command))
+		if (newArray == NULL)
 		{
-			/* errors have already been logged */
+			log_error(ALLOCATION_FAILED_ERROR);
 			return false;
 		}
+
+		indexArray->array = newArray;
+		indexArray->capacity = newCap;
 	}
 
-	if (!summary_finish_constraint(sourceDB, &indexSpecs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	if (!summary_increment_timing(sourceDB,
-								  TIMING_SECTION_ALTER_TABLE,
-								  1, /* count */
-								  0, /* bytes */
-								  indexSpecs.summary.durationMs))
-	{
-		/* errors have already been logged */
-		return false;
-	}
+	/* deep copy the SourceIndex struct (all fields are fixed-size buffers) */
+	indexArray->array[indexArray->count] = *index;
+	indexArray->count++;
 
 	return true;
 }
