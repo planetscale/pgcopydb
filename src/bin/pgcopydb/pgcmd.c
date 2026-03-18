@@ -39,6 +39,7 @@
 #define RUN_PROGRAM_IMPLEMENTATION
 #include "runprogram.h"
 
+
 /*
  * Get psql --version output in pgPaths->pg_version.
  */

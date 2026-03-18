@@ -53,9 +53,9 @@
 	"  --skip-analyze                Skip running vacuumdb --analyze-only\n" \
 	"  --skip-db-properties          Skip copying ALTER DATABASE SET properties\n" \
 	"  --skip-split-by-ctid          Skip spliting tables by ctid\n" \
+	"  --skip-xid-check             Skip the XID wraparound proximity check\n" \
 	"  --requirements <filename>     List extensions requirements\n" \
 	"  --filters <filename>          Use the filters defined in <filename>\n" \
-	"  --skip-xid-check             Skip the XID wraparound proximity check\n" \
 	"  --fail-fast                   Abort early in case of error\n" \
 	"  --restart                     Allow restarting when temp files exist already\n" \
 	"  --resume                      Allow resuming operations after a failure\n" \
@@ -252,6 +252,79 @@ clone_and_follow(CopyDataSpec *copySpecs)
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_SOURCE);
+	}
+
+	/*
+	 * When the source is a read-only standby, validate that prerequisites
+	 * are met: PostgreSQL >= 16 (required for logical replication from
+	 * standby) and hot_standby_feedback = on (prevents replication slot
+	 * invalidation on the standby).
+	 */
+	if (copySpecs->sourceSnapshot.isReadOnly)
+	{
+		PGSQL srcValidation = { 0 };
+
+		if (!pgsql_init(&srcValidation,
+						copySpecs->connStrings.source_pguri,
+						PGSQL_CONN_SOURCE))
+		{
+			log_error("Failed to init connection for standby validation");
+			exit(EXIT_CODE_SOURCE);
+		}
+
+		if (!pgsql_server_version(&srcValidation))
+		{
+			log_error("Failed to query server version for standby validation");
+			pgsql_finish(&srcValidation);
+			exit(EXIT_CODE_SOURCE);
+		}
+
+		if (srcValidation.pgversion_num < 160000)
+		{
+			log_fatal("Logical replication from a standby requires "
+					  "PostgreSQL 16 or later, source server is %s",
+					  srcValidation.pgversion);
+			pgsql_finish(&srcValidation);
+			exit(EXIT_CODE_SOURCE);
+		}
+
+		/*
+		 * Query hot_standby_feedback; when it is off the primary may remove
+		 * rows that the standby's logical replication slot still needs,
+		 * leading to replication slot invalidation.
+		 */
+		{
+			SingleValueResultContext ctx =
+			{ { 0 }, PGSQL_RESULT_BOOL, false };
+
+			const char *sql =
+				"SELECT current_setting('hot_standby_feedback')::bool";
+
+			if (!pgsql_execute_with_params(&srcValidation, sql,
+										   0, NULL, NULL,
+										   &ctx,
+										   &parseSingleValueResult))
+			{
+				log_error("Failed to query hot_standby_feedback");
+				pgsql_finish(&srcValidation);
+				exit(EXIT_CODE_SOURCE);
+			}
+
+			if (!ctx.parsedOk || !ctx.boolVal)
+			{
+				log_fatal("Logical replication from a standby requires "
+						  "hot_standby_feedback = on to prevent "
+						  "replication slot invalidation");
+				pgsql_finish(&srcValidation);
+				exit(EXIT_CODE_SOURCE);
+			}
+		}
+
+		log_info("Standby validation passed: PostgreSQL %s with "
+				 "hot_standby_feedback = on",
+				 srcValidation.pgversion);
+
+		pgsql_finish(&srcValidation);
 	}
 
 	/*
@@ -797,6 +870,9 @@ cli_clone_follow_wait_subprocess(const char *name, pid_t pid,
 					  details);
 		}
 
+		/* avoid busy looping, wait for 150ms before checking again */
+		pg_usleep(150 * 1000);
+
 		/*
 		 * Poll the catalog for the snapshot-done signal written by the
 		 * clone child after all snapshot-dependent work (COPY + blobs)
@@ -838,9 +914,6 @@ cli_clone_follow_wait_subprocess(const char *name, pid_t pid,
 				}
 			}
 		}
-
-		/* avoid busy looping, wait for 150ms before checking again */
-		pg_usleep(150 * 1000);
 	}
 
 	if (catalogOpenedHere)

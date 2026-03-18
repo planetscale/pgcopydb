@@ -217,8 +217,8 @@ cli_copydb_getenv(CopyDBOptions *options)
 	options->indexJobs = DEFAULT_INDEX_JOBS;
 	options->restoreOptions.jobs = DEFAULT_RESTORE_JOBS;
 	options->lObjectJobs = DEFAULT_LARGE_OBJECTS_JOBS;
-	options->restoreOptions.restoreTolerance = DEFAULT_RESTORE_TOLERANCE;
 	options->splitTablesLargerThan.bytes = DEFAULT_SPLIT_TABLES_LARGER_THAN;
+	options->restoreOptions.restoreTolerance = DEFAULT_RESTORE_TOLERANCE;
 
 	EnvParser parsers[] = {
 		{ PGCOPYDB_TABLE_JOBS, ENV_TYPE_INT,
@@ -623,8 +623,8 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "skip-analyze", no_argument, NULL, 'a' },
 		{ "skip-db-properties", no_argument, NULL, 'g' },
 		{ "skip-split-by-ctid", no_argument, NULL, 'k' },
-		{ "no-tablespaces", no_argument, NULL, 'y' },
 		{ "skip-xid-check", no_argument, NULL, 'K' },
+		{ "no-tablespaces", no_argument, NULL, 'y' },
 		{ "use-copy-binary", no_argument, NULL, 'n' },
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
@@ -641,13 +641,13 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "origin", required_argument, NULL, 'o' },
 		{ "create-slot", no_argument, NULL, 't' },
 		{ "endpos", required_argument, NULL, 'E' },
-		{ "restore-tolerance", required_argument, NULL, 256 },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
 		{ "notice", no_argument, NULL, 'v' },
 		{ "debug", no_argument, NULL, 'd' },
 		{ "trace", no_argument, NULL, 'z' },
 		{ "quiet", no_argument, NULL, 'q' },
+		{ "restore-tolerance", required_argument, NULL, 256 },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
 	};
