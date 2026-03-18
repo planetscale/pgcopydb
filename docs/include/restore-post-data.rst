@@ -7,6 +7,7 @@
      --target             Postgres URI to the target database
      --dir                Work directory to use
      --restore-jobs       Number of concurrent jobs for pg_restore
+     --restore-tolerance  Max pg_restore errors to tolerate (default 10)
      --no-owner           Do not set ownership of objects to match the original database
      --no-acl             Prevent restoration of access privileges (grant/revoke commands).
      --no-comments        Do not output commands to restore comments

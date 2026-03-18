@@ -7,4 +7,5 @@
      --target             Postgres URI to the target database
      --dir                Work directory to use
      --restore-jobs       Number of concurrent jobs for pg_restore
-   
+     --restore-tolerance  Max pg_restore errors to tolerate (default 10)
+

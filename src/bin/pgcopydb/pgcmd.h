@@ -240,6 +240,7 @@ typedef struct RestoreOptions
 	bool noACL;
 	bool noTableSpaces;
 	int jobs;
+	int restoreTolerance;
 	PostgresRestoreSection section;
 } RestoreOptions;
 

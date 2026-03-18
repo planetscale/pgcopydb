@@ -9,6 +9,7 @@
      --table-jobs                  Number of concurrent COPY jobs to run
      --index-jobs                  Number of concurrent CREATE INDEX jobs to run
      --restore-jobs                Number of concurrent jobs for pg_restore
+     --restore-tolerance           Max pg_restore errors to tolerate (default 10)
      --large-objects-jobs          Number of concurrent Large Objects jobs to run
      --split-tables-larger-than    Same-table concurrency size threshold
      --split-max-parts             Maximum number of jobs for Same-table concurrency 
