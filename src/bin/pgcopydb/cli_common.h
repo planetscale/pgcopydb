@@ -73,6 +73,7 @@ typedef struct CopyDBOptions
 	bool noRolesPasswords;
 	bool failFast;
 	bool useCopyBinary;
+	bool skipXidCheck;
 
 	bool restart;
 	bool resume;

@@ -98,6 +98,12 @@ TopLevelTiming topLevelTimingArray[] = {
 		.jobsMask = TIMING_LOBJECTS_JOBS
 	},
 	{
+		.section = TIMING_SECTION_SNAPSHOT_DONE,
+		.label = "Snapshot Done",
+		.conn = "source",
+		.jobsMask = TIMING_SINGLE_JOB
+	},
+	{
 		.section = TIMING_SECTION_FINALIZE_SCHEMA,
 		.label = "Finalize Schema",
 		.conn = "both",

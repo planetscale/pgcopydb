@@ -8,6 +8,17 @@
 
 #include "copydb.h"
 #include "log.h"
+#include "pgsql.h"
+
+/*
+ * XID wraparound proximity thresholds expressed as percentages of the
+ * 2^31 (2,147,483,648) XID space. A REPEATABLE READ snapshot pins xmin,
+ * preventing vacuum from freezing tuples, which can push a database
+ * toward transaction ID wraparound.
+ */
+#define XID_WRAPAROUND_WARN_PCT 75
+#define XID_WRAPAROUND_FAIL_PCT 95
+#define XID_WRAPAROUND_LIMIT 2147483648ULL
 
 /*
  * copydb_copy_snapshot initializes a new TransactionSnapshot from another
@@ -278,6 +289,99 @@ copydb_close_snapshot(CopyDataSpec *copySpecs)
 
 
 /*
+ * copydb_check_xid_wraparound queries age(datfrozenxid) on the source
+ * database and checks proximity to XID wraparound. Returns false only
+ * when the XID age exceeds the fail threshold and --skip-xid-check was
+ * not used.
+ */
+static bool
+copydb_check_xid_wraparound(CopyDataSpec *copySpecs)
+{
+	if (copySpecs->skipXidCheck)
+	{
+		log_notice("Skipping XID wraparound check per --skip-xid-check");
+		return true;
+	}
+
+	PGSQL pgsql = { 0 };
+	char *pguri = copySpecs->connStrings.source_pguri;
+
+	if (!pgsql_init(&pgsql, pguri, PGSQL_CONN_SOURCE))
+	{
+		log_warn("Failed to init connection for XID wraparound check, "
+				 "skipping");
+		return true;
+	}
+
+	SingleValueResultContext parseContext = {
+		{ 0 }, PGSQL_RESULT_BIGINT, false
+	};
+
+	const char *sql =
+		"SELECT age(datfrozenxid) FROM pg_database "
+		"WHERE datname = current_database()";
+
+	if (!pgsql_execute_with_params(&pgsql, sql,
+								   0, NULL, NULL,
+								   &parseContext,
+								   &parseSingleValueResult))
+	{
+		log_warn("Failed to query age(datfrozenxid) on source database, "
+				 "skipping wraparound check");
+		(void) pgsql_finish(&pgsql);
+		return true;
+	}
+
+	(void) pgsql_finish(&pgsql);
+
+	if (!parseContext.parsedOk || parseContext.isNull)
+	{
+		log_warn("Could not determine XID age on source database, "
+				 "skipping wraparound check");
+		return true;
+	}
+
+	uint64_t xidAge = parseContext.bigint;
+	uint64_t warnThreshold =
+		(XID_WRAPAROUND_LIMIT * XID_WRAPAROUND_WARN_PCT) / 100;
+	uint64_t failThreshold =
+		(XID_WRAPAROUND_LIMIT * XID_WRAPAROUND_FAIL_PCT) / 100;
+
+	double pctUsed =
+		(double) xidAge / (double) XID_WRAPAROUND_LIMIT * 100.0;
+
+	if (xidAge >= failThreshold)
+	{
+		log_error("Source database XID age is %" PRIu64
+				  " (%.1f%% of 2^31 limit), "
+				  "which is dangerously close to XID wraparound",
+				  xidAge, pctUsed);
+		log_error("Taking a REPEATABLE READ snapshot would pin xmin and "
+				  "prevent vacuum from freezing tuples");
+		log_error("Use --skip-xid-check to bypass this safety check");
+		return false;
+	}
+
+	if (xidAge >= warnThreshold)
+	{
+		log_warn("Source database XID age is %" PRIu64
+				 " (%.1f%% of 2^31 limit)",
+				 xidAge, pctUsed);
+		log_warn("The clone snapshot will pin xmin, preventing vacuum from "
+				 "freezing tuples. Monitor for wraparound during the clone.");
+	}
+	else
+	{
+		log_info("Source database XID age is %" PRIu64
+				 " (%.1f%% of 2^31 limit)",
+				 xidAge, pctUsed);
+	}
+
+	return true;
+}
+
+
+/*
  * copydb_prepare_snapshot connects to the source database and either export a
  * new Postgres snapshot, or set the transaction's snapshot to the given
  * already exported snapshot (see --snapshot and PGCOPYDB_SNAPSHOT).
@@ -306,6 +410,13 @@ copydb_prepare_snapshot(CopyDataSpec *copySpecs)
 		copySpecs->sourceSnapshot.state = SNAPSHOT_STATE_SKIPPED;
 		log_debug("copydb_prepare_snapshot: --not-consistent, skipping");
 		return true;
+	}
+
+	/* check XID wraparound proximity before pinning xmin */
+	if (!copydb_check_xid_wraparound(copySpecs))
+	{
+		/* errors have already been logged */
+		return false;
 	}
 
 	/*
@@ -393,6 +504,13 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 									   const char *logrep_pguri,
 									   ReplicationSlot *slot)
 {
+	/* check XID wraparound proximity before creating replication slot */
+	if (!copydb_check_xid_wraparound(copySpecs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	TransactionSnapshot *sourceSnapshot = &(copySpecs->sourceSnapshot);
 
 	/*
