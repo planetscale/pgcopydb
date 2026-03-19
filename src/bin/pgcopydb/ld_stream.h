@@ -404,6 +404,7 @@ typedef struct StreamContext
 	StreamCounters counters;
 
 	bool transactionInProgress;
+	bool pipelineBroken;        /* EPIPE on stdout, downstream process died */
 } StreamContext;
 
 
