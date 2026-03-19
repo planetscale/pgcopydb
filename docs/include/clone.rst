@@ -45,5 +45,6 @@
      --create-slot                 Create the replication slot
      --origin                      Use this Postgres replication origin node name
      --endpos                      Stop replaying changes when reaching this LSN
+     --defer-indexes               Defer index building until after all table data is copied
      --use-copy-binary             Use the COPY BINARY format for COPY operations
    

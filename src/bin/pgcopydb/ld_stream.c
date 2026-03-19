@@ -525,6 +525,14 @@ startLogicalStreaming(StreamSpecs *specs)
 					 LSN_FORMAT_ARGS(context.tracking->flushed_lsn),
 					 LSN_FORMAT_ARGS(context.endpos));
 		}
+		else if (privateContext->pipelineBroken)
+		{
+			log_error("Downstream pipeline process has exited, "
+					  "stopping at %X/%X",
+					  LSN_FORMAT_ARGS(context.tracking->written_lsn));
+
+			return false;
+		}
 		else if (retries > 0 &&
 				 context.tracking->written_lsn == waterMarkLSN)
 		{
@@ -874,6 +882,11 @@ stream_write_json(LogicalStreamContext *context, bool previous)
 	{
 		if (!write_to_stream(privateContext->out, buffer->data, buffer->len))
 		{
+			if (errno == EPIPE)
+			{
+				privateContext->pipelineBroken = true;
+			}
+
 			log_error("Failed to write JSON message to stdout: "
 					  "see above for details");
 			log_debug("JSON message: %s", buffer->data);
@@ -887,6 +900,11 @@ stream_write_json(LogicalStreamContext *context, bool previous)
 		{
 			if (fflush(privateContext->out) != 0)
 			{
+				if (errno == EPIPE)
+				{
+					privateContext->pipelineBroken = true;
+				}
+
 				log_error("Failed to flush standard output: %m");
 				destroyPQExpBuffer(buffer);
 				return false;
