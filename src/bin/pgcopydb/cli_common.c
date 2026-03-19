@@ -256,7 +256,9 @@ cli_copydb_getenv(CopyDBOptions *options)
 		{ PGCOPYDB_SKIP_XID_CHECK, ENV_TYPE_BOOL,
 		  &(options->skipXidCheck) },
 		{ PGCOPYDB_RESTORE_TOLERANCE, ENV_TYPE_INT,
-		  &(options->restoreOptions.restoreTolerance), 0, true, 0, true, 10000 }
+		  &(options->restoreOptions.restoreTolerance), 0, true, 0, true, 10000 },
+		{ PGCOPYDB_DEFER_INDEXES, ENV_TYPE_BOOL,
+		  &(options->deferIndexes) }
 	};
 
 	int parserCount = sizeof(parsers) / sizeof(parsers[0]);
@@ -648,6 +650,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "trace", no_argument, NULL, 'z' },
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "restore-tolerance", required_argument, NULL, 256 },
+		{ "defer-indexes", no_argument, NULL, 257 },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
 	};
@@ -1126,6 +1129,13 @@ cli_copy_db_getopts(int argc, char **argv)
 				}
 				log_trace("--restore-tolerance %d",
 						  options.restoreOptions.restoreTolerance);
+				break;
+			}
+
+			case 257:
+			{
+				options.deferIndexes = true;
+				log_trace("--defer-indexes");
 				break;
 			}
 

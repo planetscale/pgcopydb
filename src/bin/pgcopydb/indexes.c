@@ -25,6 +25,7 @@
 static bool copydb_add_table_indexes_hook(void *context, SourceIndex *index);
 static bool copydb_collect_constraint_indexes_hook(void *ctx, SourceIndex *index);
 static bool copydb_copy_all_indexes_hook(void *ctx, SourceIndex *index);
+static bool copydb_queue_deferred_index_hook(void *ctx, SourceIndex *index);
 
 
 /*
@@ -761,6 +762,63 @@ copydb_copy_all_indexes_hook(void *ctx, SourceIndex *index)
 	if (!queue_send(&(specs->indexQueue), &mesg))
 	{
 		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_queue_deferred_index_hook is an iterator callback function used
+ * when --defer-indexes is set to queue all indexes after COPY completes.
+ */
+static bool
+copydb_queue_deferred_index_hook(void *ctx, SourceIndex *index)
+{
+	CopyDataSpec *specs = (CopyDataSpec *) ctx;
+
+	QMessage mesg = {
+		.type = QMSG_TYPE_INDEXOID,
+		.data.oid = index->indexOid
+	};
+
+	log_trace("Queueing deferred index %s [%u]",
+			  index->indexQname, index->indexOid);
+
+	if (!queue_send(&(specs->indexQueue), &mesg))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * copydb_queue_all_deferred_indexes queues all indexes for building after
+ * the COPY phase has completed. Used when --defer-indexes is set.
+ */
+bool
+copydb_queue_all_deferred_indexes(CopyDataSpec *specs)
+{
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+	CatalogCounts count = { 0 };
+
+	if (!catalog_count_objects(sourceDB, &count))
+	{
+		log_error("Failed to count indexes in our catalogs");
+		return false;
+	}
+
+	log_info("Queueing %lld deferred indexes",
+			 (long long) count.indexes);
+
+	if (!catalog_iter_s_index(sourceDB,
+							  specs,
+							  &copydb_queue_deferred_index_hook))
+	{
+		log_error("Failed to queue deferred indexes");
 		return false;
 	}
 

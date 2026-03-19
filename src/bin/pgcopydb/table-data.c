@@ -365,6 +365,17 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 		return false;
 	}
 
+	if (specs->deferIndexes)
+	{
+		log_info("COPY phase complete, queueing all deferred indexes");
+
+		if (!copydb_queue_all_deferred_indexes(specs))
+		{
+			log_error("Failed to queue deferred indexes");
+			return false;
+		}
+	}
+
 	if (!catalog_close(sourceDB))
 	{
 		/* errors have already been logged */
@@ -1029,12 +1040,15 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 					}
 				}
 			}
-			else if (!copydb_add_table_indexes(specs, tableSpecs))
+			else if (!specs->deferIndexes)
 			{
-				log_error("Failed to add the indexes for %s, "
-						  "see above for details",
-						  tableSpecs->sourceTable->qname);
-				return false;
+				if (!copydb_add_table_indexes(specs, tableSpecs))
+				{
+					log_error("Failed to add the indexes for %s, "
+							  "see above for details",
+							  tableSpecs->sourceTable->qname);
+					return false;
+				}
 			}
 		}
 	}

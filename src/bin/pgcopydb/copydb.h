@@ -232,6 +232,7 @@ typedef struct CopyDataSpec
 	bool skipDBproperties;
 	bool skipCtidSplit;
 	bool skipXidCheck;
+	bool deferIndexes;
 	bool noRolesPasswords;
 	bool useCopyBinary;
 
@@ -368,6 +369,7 @@ bool copydb_table_indexes_are_done(CopyDataSpec *specs,
 								   bool *constraintsAreBeingBuilt);
 
 bool copydb_copy_all_indexes(CopyDataSpec *specs);
+bool copydb_queue_all_deferred_indexes(CopyDataSpec *specs);
 
 bool copydb_create_index(CopyDataSpec *specs,
 						 PGSQL *dst,

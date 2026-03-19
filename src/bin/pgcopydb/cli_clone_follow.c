@@ -68,6 +68,7 @@
 	"  --create-slot                 Create the replication slot\n" \
 	"  --origin                      Use this Postgres replication origin node name\n" \
 	"  --endpos                      Stop replaying changes when reaching this LSN\n" \
+	"  --defer-indexes               Defer index building until after all table data is copied\n" \
 	"  --use-copy-binary             Use the COPY BINARY format for COPY operations\n" \
 
 CommandLine clone_command =
