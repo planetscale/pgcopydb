@@ -141,9 +141,18 @@ copydb_process_table_data(CopyDataSpec *specs)
 		}
 
 		/*
-		 * Start as many index worker process as --index-jobs
+		 * Start as many index worker process as --index-jobs.
+		 * When --defer-indexes is used with --follow, skip this step
+		 * entirely; STEP 10 will create all indexes using pgcopydb's
+		 * parallel workers in the parent process.
 		 */
-		if (errors == 0 && !copydb_start_index_supervisor(specs))
+		if (specs->deferIndexes && specs->follow)
+		{
+			log_info("STEP 6: skipping CREATE INDEX (--defer-indexes)");
+			log_info("STEP 7: skipping constraints (--defer-indexes)");
+			log_info("STEP 8: skipping VACUUM (--defer-indexes)");
+		}
+		else if (errors == 0 && !copydb_start_index_supervisor(specs))
 		{
 			/* errors have already been logged */
 			++errors;
@@ -153,8 +162,13 @@ copydb_process_table_data(CopyDataSpec *specs)
 		 * Now create as many VACUUM ANALYZE sub-processes as needed, per
 		 * --table-jobs. Could be exposed separately as --vacuumJobs too, but
 		 * that's not been done at this time.
+		 *
+		 * When --defer-indexes is used with --follow, skip VACUUM here:
+		 * the index supervisor (which sends STOP to vacuum workers) is
+		 * not started, so vacuum workers would hang forever.
 		 */
-		if (errors == 0 && !vacuum_start_supervisor(specs))
+		if (errors == 0 && !(specs->deferIndexes && specs->follow) &&
+			!vacuum_start_supervisor(specs))
 		{
 			/* errors have already been logged */
 			++errors;
@@ -347,7 +361,7 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 		{
 			(void) copydb_fatal_exit();
 		}
-		else
+		else if (!(specs->deferIndexes && specs->follow))
 		{
 			/* send create index workers a STOP message */
 			if (!copydb_index_workers_send_stop(specs))
@@ -365,7 +379,7 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 		return false;
 	}
 
-	if (specs->deferIndexes)
+	if (specs->deferIndexes && !specs->follow)
 	{
 		log_info("COPY phase complete, queueing all deferred indexes");
 
@@ -385,8 +399,15 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 	/*
 	 * Now that the COPY processes are done, signal this is the end to the
 	 * CREATE INDEX sub-processes by adding the STOP message to
-	 * their queues.
+	 * their queues.  When --defer-indexes --follow, no index workers were
+	 * started so skip this.
 	 */
+	if (specs->deferIndexes && specs->follow)
+	{
+		/* no index workers to stop */
+		return true;
+	}
+
 	if (!copydb_index_workers_send_stop(specs))
 	{
 		/*
@@ -1027,7 +1048,8 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 
 			if (tableSpecs->sourceTable->indexCount == 0)
 			{
-				if (!specs->skipVacuum)
+				if (!specs->skipVacuum &&
+					!(specs->deferIndexes && specs->follow))
 				{
 					SourceTable *sourceTable = tableSpecs->sourceTable;
 
