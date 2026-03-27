@@ -258,7 +258,9 @@ cli_copydb_getenv(CopyDBOptions *options)
 		{ PGCOPYDB_RESTORE_TOLERANCE, ENV_TYPE_INT,
 		  &(options->restoreOptions.restoreTolerance), 0, true, 0, true, 10000 },
 		{ PGCOPYDB_DEFER_INDEXES, ENV_TYPE_BOOL,
-		  &(options->deferIndexes) }
+		  &(options->deferIndexes) },
+		{ PGCOPYDB_DEFER_ANALYZE, ENV_TYPE_BOOL,
+		  &(options->deferAnalyze) }
 	};
 
 	int parserCount = sizeof(parsers) / sizeof(parsers[0]);
@@ -651,6 +653,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "restore-tolerance", required_argument, NULL, 256 },
 		{ "defer-indexes", no_argument, NULL, 257 },
+		{ "defer-analyze", no_argument, NULL, 258 },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
 	};
@@ -1139,6 +1142,13 @@ cli_copy_db_getopts(int argc, char **argv)
 				break;
 			}
 
+			case 258:
+			{
+				options.deferAnalyze = true;
+				log_trace("--defer-analyze");
+				break;
+			}
+
 			case '?':
 			default:
 			{
@@ -1154,6 +1164,13 @@ cli_copy_db_getopts(int argc, char **argv)
 	{
 		options.restoreOptions.jobs = options.indexJobs;
 		log_trace("--restore-jobs %d", options.indexJobs);
+	}
+
+	if (options.skipVacuum && options.deferAnalyze)
+	{
+		log_warn("--skip-vacuum already skips VACUUM ANALYZE, "
+				 "ignoring --defer-analyze");
+		options.deferAnalyze = false;
 	}
 
 	if (options.connStrings.source_pguri == NULL ||

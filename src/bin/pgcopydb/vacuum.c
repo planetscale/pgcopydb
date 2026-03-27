@@ -140,6 +140,12 @@ vacuum_start_workers(CopyDataSpec *specs)
 		return true;
 	}
 
+	if (specs->deferAnalyze)
+	{
+		log_info("STEP 8: deferring VACUUM ANALYZE per --defer-analyze");
+		return true;
+	}
+
 	log_info("STEP 8: starting %d VACUUM processes", specs->vacuumJobs);
 
 	for (int i = 0; i < specs->vacuumJobs; i++)
@@ -424,7 +430,7 @@ vacuum_add_table(CopyDataSpec *specs, uint32_t oid)
 bool
 vacuum_send_stop(CopyDataSpec *specs)
 {
-	if (specs->skipVacuum)
+	if (specs->skipVacuum || specs->deferAnalyze)
 	{
 		return true;
 	}
