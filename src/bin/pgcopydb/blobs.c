@@ -174,6 +174,17 @@ copydb_has_large_objects(CopyDataSpec *specs, bool *hasLargeObjects)
 
 	*hasLargeObjects = context.boolVal;
 
+	/*
+	 * Close the REPEATABLE READ snapshot connection now that the query is
+	 * done.  Leaving it open would pin backend_xmin on the source for the
+	 * lifetime of the clone subprocess (through index building and
+	 * post-data restore), preventing VACUUM from advancing.
+	 */
+	if (!copydb_close_snapshot(specs))
+	{
+		log_warn("Failed to close snapshot after large object check");
+	}
+
 	return true;
 }
 

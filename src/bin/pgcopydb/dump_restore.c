@@ -555,6 +555,40 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 		return false;
 	}
 
+	/*
+	 * When --defer-indexes --follow was used, STEP 6 was skipped in the
+	 * clone subprocess. Build indexes now using pgcopydb's parallel workers
+	 * (CREATE INDEX with ShareLock, then ALTER TABLE ADD CONSTRAINT USING
+	 * INDEX with brief AccessExclusiveLock), instead of letting pg_restore
+	 * do it with a single ALTER TABLE that holds AccessExclusiveLock for
+	 * hours.
+	 *
+	 * Without --follow, --defer-indexes only reorders index creation within
+	 * the COPY supervisor (STEP 6 still runs), so indexes already exist.
+	 *
+	 * Workers record completions in the summary catalog, so the restore
+	 * list hook will comment out these entries automatically.
+	 */
+	if (specs->deferIndexes && specs->follow)
+	{
+		log_info("Creating deferred indexes and constraints using "
+				 "%d parallel workers", specs->indexJobs);
+
+		bool savedSkipVacuum = specs->skipVacuum;
+		specs->skipVacuum = true;
+
+		bool ok = copydb_copy_all_indexes(specs);
+
+		specs->skipVacuum = savedSkipVacuum;
+
+		if (!ok)
+		{
+			log_error("Failed to create deferred indexes, "
+					  "see above for details");
+			return false;
+		}
+	}
+
 	if (!copydb_write_restore_list(specs, PG_DUMP_SECTION_POST_DATA))
 	{
 		log_error("Failed to prepare the pg_restore --use-list catalogs, "
