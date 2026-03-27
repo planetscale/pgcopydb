@@ -69,6 +69,7 @@
 	"  --origin                      Use this Postgres replication origin node name\n" \
 	"  --endpos                      Stop replaying changes when reaching this LSN\n" \
 	"  --defer-indexes               Defer index building until after all table data is copied\n" \
+	"  --defer-analyze               Defer ANALYZE until after post-data restore\n" \
 	"  --use-copy-binary             Use the COPY BINARY format for COPY operations\n" \
 
 CommandLine clone_command =
@@ -455,6 +456,19 @@ clone_and_follow(CopyDataSpec *copySpecs)
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
+		if (copySpecs->deferAnalyze)
+		{
+			log_info("Running deferred ANALYZE on target database");
+
+			if (!pg_vacuumdb_analyze_only_target(&(copySpecs->pgPaths),
+												 &(copySpecs->connStrings),
+												 copySpecs->tableJobs))
+			{
+				log_warn("Failed to run deferred ANALYZE, "
+						 "run vacuumdb --analyze-only manually before cutover");
+			}
+		}
+
 		if (!catalog_close_from_specs(copySpecs))
 		{
 			log_error("Failed to close catalogs after deferred index creation");
@@ -780,6 +794,19 @@ cloneDB(CopyDataSpec *copySpecs)
 					  "see above for details");
 			(void) summary_print_failure_report(copySpecs);
 			return false;
+		}
+
+		if (copySpecs->deferAnalyze)
+		{
+			log_info("Running deferred ANALYZE on target database");
+
+			if (!pg_vacuumdb_analyze_only_target(&(copySpecs->pgPaths),
+												 &(copySpecs->connStrings),
+												 copySpecs->tableJobs))
+			{
+				log_warn("Failed to run deferred ANALYZE, "
+						 "run vacuumdb --analyze-only manually before cutover");
+			}
 		}
 
 		/*

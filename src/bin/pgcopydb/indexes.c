@@ -448,7 +448,7 @@ copydb_create_index_by_oid(CopyDataSpec *specs, PGSQL *dst, uint32_t indexOid)
 			return false;
 		}
 
-		if (!specs->skipVacuum)
+		if (!specs->skipVacuum && !specs->deferAnalyze)
 		{
 			if (!vacuum_add_table(specs, table->oid))
 			{

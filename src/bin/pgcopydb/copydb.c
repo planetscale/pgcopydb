@@ -518,6 +518,7 @@ copydb_init_specs(CopyDataSpec *specs,
 		.skipCtidSplit = options->skipCtidSplit,
 		.skipXidCheck = options->skipXidCheck,
 		.deferIndexes = options->deferIndexes,
+		.deferAnalyze = options->deferAnalyze,
 		.noRolesPasswords = options->noRolesPasswords,
 		.failFast = options->failFast,
 		.useCopyBinary = options->useCopyBinary,
@@ -583,7 +584,8 @@ copydb_init_specs(CopyDataSpec *specs,
 	bool shouldCreateVacuumQueue = (specs->section == DATA_SECTION_ALL ||
 									specs->section == DATA_SECTION_INDEXES ||
 									specs->section == DATA_SECTION_TABLE_DATA) &&
-								   !specs->skipVacuum;
+								   !specs->skipVacuum &&
+								   !specs->deferAnalyze;
 	if (shouldCreateVacuumQueue)
 	{
 		if (!queue_create(&(specs->vacuumQueue), "vacuum"))
