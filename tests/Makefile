@@ -73,7 +73,7 @@ exclude-extension: build
 blob-snapshot-release:
 	$(MAKE) -C $@
 
-follow-defer-indexes:
+follow-defer-indexes: build
 	$(MAKE) -C $@
 
 timescaledb: build
