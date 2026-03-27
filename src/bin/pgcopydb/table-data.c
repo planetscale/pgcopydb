@@ -379,6 +379,19 @@ copydb_copy_supervisor(CopyDataSpec *specs)
 		return false;
 	}
 
+	/*
+	 * Signal parent that all snapshot-dependent COPY work is complete.
+	 * The parent polls for this and releases the exported snapshot so
+	 * VACUUM can advance on the source while indexes are still building.
+	 */
+	if (!summary_start_timing(sourceDB, TIMING_SECTION_SNAPSHOT_DONE) ||
+		!summary_stop_timing(sourceDB, TIMING_SECTION_SNAPSHOT_DONE))
+	{
+		log_warn("Failed to write snapshot-done signal from COPY supervisor");
+
+		/* Non-fatal: parent falls back to closing snapshot after clone exits */
+	}
+
 	if (specs->deferIndexes && !specs->follow)
 	{
 		log_info("COPY phase complete, queueing all deferred indexes");
