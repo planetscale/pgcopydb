@@ -1048,7 +1048,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 
 			if (tableSpecs->sourceTable->indexCount == 0)
 			{
-				if (!specs->skipVacuum &&
+				if (!specs->skipVacuum && !specs->deferAnalyze &&
 					!(specs->deferIndexes && specs->follow))
 				{
 					SourceTable *sourceTable = tableSpecs->sourceTable;
