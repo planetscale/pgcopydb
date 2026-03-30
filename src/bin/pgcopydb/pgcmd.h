@@ -260,7 +260,10 @@ bool pg_dump_db(PostgresPaths *pgPaths,
 				const char *filename);
 
 bool pg_vacuumdb_analyze_only(PostgresPaths *pgPaths, ConnStrings *connStrings, int jobs);
-bool pg_vacuumdb_analyze_only_target(PostgresPaths *pgPaths, ConnStrings *connStrings, int jobs);
+
+bool pg_vacuumdb_analyze_only_target(PostgresPaths *pgPaths,
+									 ConnStrings *connStrings,
+									 int jobs);
 
 bool pg_dumpall_roles(PostgresPaths *pgPaths,
 					  ConnStrings *connStrings,
