@@ -766,13 +766,23 @@ cloneDB(CopyDataSpec *copySpecs)
 		return false;
 	}
 
-	/* Signal parent that snapshot-dependent work is complete */
-	if (!summary_start_timing(sourceDB, TIMING_SECTION_SNAPSHOT_DONE) ||
-		!summary_stop_timing(sourceDB, TIMING_SECTION_SNAPSHOT_DONE))
-	{
-		log_warn("Failed to write snapshot-done signal");
+	/*
+	 * Fallback: write snapshot-done signal if COPY supervisor didn't
+	 * (e.g. zero tables, or COPY supervisor failed before writing it).
+	 */
+	TopLevelTiming snDoneTiming = { 0 };
 
-		/* Non-fatal: parent falls back to closing snapshot after clone exits */
+	if (!summary_lookup_timing(sourceDB, &snDoneTiming,
+							   TIMING_SECTION_SNAPSHOT_DONE) ||
+		snDoneTiming.doneTime == 0)
+	{
+		if (!summary_start_timing(sourceDB, TIMING_SECTION_SNAPSHOT_DONE) ||
+			!summary_stop_timing(sourceDB, TIMING_SECTION_SNAPSHOT_DONE))
+		{
+			log_warn("Failed to write snapshot-done signal");
+
+			/* Non-fatal: parent falls back to closing snapshot after clone exits */
+		}
 	}
 
 	/*
