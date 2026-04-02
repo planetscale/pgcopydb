@@ -98,6 +98,12 @@ TopLevelTiming topLevelTimingArray[] = {
 		.jobsMask = TIMING_LOBJECTS_JOBS
 	},
 	{
+		.section = TIMING_SECTION_INDEXES_BUILT,
+		.label = "Deferred Indexes Built",
+		.conn = "target",
+		.jobsMask = TIMING_INDEX_JOBS
+	},
+	{
 		.section = TIMING_SECTION_FINALIZE_SCHEMA,
 		.label = "Finalize Schema",
 		.conn = "both",

@@ -30,9 +30,12 @@ static bool copydb_queue_deferred_index_hook(void *ctx, SourceIndex *index);
 
 /*
  * copydb_start_index_supervisor starts a CREATE INDEX supervisor process.
+ * When supervisorPID is not NULL, the forked PID is stored there so the
+ * caller can wait for it specifically (avoiding waitpid(-1) which would
+ * reap unrelated children such as the follow process).
  */
 bool
-copydb_start_index_supervisor(CopyDataSpec *specs)
+copydb_start_index_supervisor(CopyDataSpec *specs, pid_t *supervisorPID)
 {
 	/*
 	 * Flush stdio channels just before fork, to avoid double-output problems.
@@ -67,6 +70,10 @@ copydb_start_index_supervisor(CopyDataSpec *specs)
 		default:
 		{
 			/* fork succeeded, in parent */
+			if (supervisorPID != NULL)
+			{
+				*supervisorPID = fpid;
+			}
 			break;
 		}
 	}
@@ -712,8 +719,15 @@ copydb_copy_all_indexes(CopyDataSpec *specs)
 			 (long long) count.indexes,
 			 specs->indexJobs);
 
-	/* first start index workers that feed from the indexQueue */
-	if (!copydb_start_index_supervisor(specs))
+	/*
+	 * Start the index supervisor. When --defer-indexes --follow, track the
+	 * supervisor PID so we can wait specifically for it without accidentally
+	 * reaping the follow process via waitpid(-1).
+	 */
+	pid_t supervisorPID = 0;
+	bool trackPID = specs->deferIndexes && specs->follow;
+
+	if (!copydb_start_index_supervisor(specs, trackPID ? &supervisorPID : NULL))
 	{
 		/* errors have already been logged */
 		return false;
@@ -733,7 +747,21 @@ copydb_copy_all_indexes(CopyDataSpec *specs)
 		return false;
 	}
 
-	if (!copydb_wait_for_subprocesses(specs->failFast))
+	/*
+	 * When --defer-indexes --follow, use targeted waitpid for the supervisor
+	 * only. The follow process (PID C) is also a child and must not be reaped
+	 * here — it needs to keep running until CDC apply completes.
+	 */
+	if (trackPID)
+	{
+		if (!copydb_wait_for_pid(supervisorPID))
+		{
+			log_error("Index supervisor exited with error status, "
+					  "see above for details");
+			return false;
+		}
+	}
+	else if (!copydb_wait_for_subprocesses(specs->failFast))
 	{
 		log_error("Some sub-processes have exited with error status, "
 				  "see above for details");

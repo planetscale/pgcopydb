@@ -802,6 +802,72 @@ copydb_wait_for_subprocesses(bool failFast)
 
 
 /*
+ * copydb_wait_for_pid waits for a specific child process to exit and returns
+ * true when the child exited with code zero (success). Unlike
+ * copydb_wait_for_subprocesses which uses waitpid(-1) and reaps all children,
+ * this function only waits for the given PID.
+ */
+bool
+copydb_wait_for_pid(pid_t pid)
+{
+	log_debug("Waiting for sub-process %d to finish", pid);
+
+	for (;;)
+	{
+		int status;
+		pid_t ret = waitpid(pid, &status, WNOHANG);
+
+		if (ret == -1)
+		{
+			if (errno == ECHILD)
+			{
+				/* child already reaped or doesn't exist */
+				log_debug("copydb_wait_for_pid: child %d already gone", pid);
+				return true;
+			}
+
+			pg_usleep(100 * 1000); /* 100 ms */
+			continue;
+		}
+
+		if (ret == 0)
+		{
+			/* child still running */
+			pg_usleep(100 * 1000); /* 100 ms */
+			continue;
+		}
+
+		/* child exited */
+		int returnCode = WEXITSTATUS(status);
+		int sig = 0;
+
+		if (WIFSIGNALED(status))
+		{
+			sig = WTERMSIG(status);
+		}
+
+		if (returnCode == 0 && signal_is_handled(sig))
+		{
+			log_debug("Sub-process %d exited with code %d", pid, returnCode);
+			return true;
+		}
+
+		if (sig == 0)
+		{
+			log_error("Sub-process %d exited with code %d", pid, returnCode);
+		}
+		else
+		{
+			log_error("Sub-process %d exited with code %d and signal %s",
+					  pid, returnCode, signal_to_string(sig));
+		}
+
+		return false;
+	}
+}
+
+
+/*
  * copydb_register_sysv_semaphore registers a semaphore to our internal array
  * of System V resources for cleanup at exit.
  */

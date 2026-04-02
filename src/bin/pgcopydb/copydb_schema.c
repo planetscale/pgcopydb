@@ -400,6 +400,12 @@ copydb_fetch_previous_run_state(CopyDataSpec *specs)
 		log_notice("Large Objects have been copied to the target instance");
 	}
 
+	if (topLevelTimingArray[TIMING_SECTION_INDEXES_BUILT].doneTime > 0)
+	{
+		specs->runState.deferredIndexesBuilt = true;
+		log_notice("Deferred indexes have been built on the target instance");
+	}
+
 	if (topLevelTimingArray[TIMING_SECTION_FINALIZE_SCHEMA].doneTime > 0)
 	{
 		specs->runState.schemaPostDataHasBeenRestored = true;
