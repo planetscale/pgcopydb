@@ -1,31 +1,66 @@
-### pgcopydb (Unreleased) ###
+### pgcopydb v0.18 ###
+
+Based on upstream pgcopydb v0.17 with reliability, filtering, and CDC
+improvements for production migration workloads.
 
 ### Added
-* Support for PostgreSQL 17 and 18
-* New `--skip-publications` flag allows migrations to proceed when publications already exist on the source database or need to be managed separately
-* New `pgcopydb list views` command to list all views from the source database
-* New `pgcopydb list triggers` command to list all triggers from the source database with schema and table details
-* Enhanced failure reporting: When migrations fail, pgcopydb now displays a detailed summary showing completed phases, failure location, progress within the failed phase, and resource counts (tables, indexes, constraints, sequences, views, triggers)
-* Views and triggers are now tracked in internal SQLite catalogs and included in migration summaries
+
+* PostgreSQL 17 and 18 support
+* Support for `clone --follow` from replica servers
+* Resilient retry with exponential backoff for COPY workers on transient
+  connection failures
+* Extension filtering with dependency tracking and ACL handling for
+  extension-owned objects
+* Pass exclude-table filters through to pg_dump for cleaner schema dumps
+  and filter cross-schema FK dependencies that reference excluded schemas
+* `[exclude-event-trigger]` filter support
+* Enhanced failure reporting with detailed summary of completed phases,
+  failure location, and resource counts
+* Pre-clone XID wraparound proximity check to warn before starting a long
+  migration near wraparound
+* `--defer-indexes` flag to defer index building until after all table data
+  is copied, reducing lock contention during COPY. With `--follow`, indexes
+  are built using parallel CREATE INDEX with ShareLock and the source
+  snapshot is released immediately after COPY completes. CDC apply is gated
+  until FK constraints and triggers are restored, ensuring referential
+  integrity during replay
+* `--defer-analyze` flag to defer VACUUM ANALYZE until after post-data
+  restore
+* `--restore-tolerance` flag to control how many pg_restore errors are
+  tolerated before failing
+* `--skip-publications` flag to skip publication creation on the target
+* `pgcopydb list views` and `pgcopydb list triggers` commands
 
 ### Fixed
 
-**Migrations with Filters:**
-* Migrations using `--follow` with table/schema filters now work reliably without "database source is already in use" errors (#624, #829, #871, #910)
-* Running multiple pgcopydb commands with filters in sequence no longer causes catalog conflicts
-* Filters are now correctly applied during both the initial copy and ongoing replication phases
+**CDC Reliability:**
+* Fix prepared statement hash collision crash — DEALLOCATE ALL at
+  transaction boundaries prevents cross-transaction 32-bit hash collisions
+  (affects tables with REPLICA IDENTITY FULL)
+* Fix pipeline buffer overflow crash for transactions with very large column
+  values (300+ MB) by syncing mid-transaction at 512 MB threshold
+* Fix streaming pipeline retry on EPIPE when downstream process exits
+* Filters now respected during CDC apply phase, not just prefetch
+* Skip CDC replay for materialized views
+* Filter CDC messages originating from other replication tools
 
-**Change Data Capture Improvements:**
-* pgcopydb now works alongside other replication tools (PeerDB, Debezium, etc.) without conflicts
-* Tables with prepared statements (PREPARE/EXECUTE) are now replicated correctly
-* JSON and JSONB columns replicate properly when using the test_decoding plugin (#919)
+**Filtering:**
+* Migrations using `--follow` with table/schema filters no longer produce
+  "database source is already in use" errors
 
-**Schema Restoration:**
-* Migrations now continue successfully when minor extension version differences exist between source and target (e.g., PostGIS 3.1.5 → 3.5.3)
-
-**Online Migration Stability:**
-* `clone --follow --snapshot` workflows now handle transaction state correctly
-* Concurrent pgcopydb processes no longer conflict when accessing the same source database
+**Stability:**
+* Release catalog semaphore before creating constraints to avoid deadlocks
+  during parallel index builds
+* Fix snapshot connection leak after large object existence check
+* Fix pg_restore list parsing for long Archive TOC lines
+* Fix test_decoding parser for null literals and json/jsonb quoting
+* Fix test_decoding transform to skip toast columns with unchanged values
+* Fix invalid UPDATE statement generation when no columns actually changed
+* Fix deadlock during pipeline sync
+* Fix segfault when SQL state is NULL
+* Fix zero allocation during `pgcopydb list progress`
+* Fix double-free in libpq error message handling
+* Set idle_in_transaction_session_timeout to zero on the target
 
 ### pgcopydb v0.17 (August 7, 2024) ###
 
