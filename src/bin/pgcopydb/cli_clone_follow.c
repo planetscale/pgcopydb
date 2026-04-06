@@ -359,6 +359,20 @@ clone_and_follow(CopyDataSpec *copySpecs)
 	}
 
 	/*
+	 * Close catalogs before forking so that each subprocess gets its own
+	 * fresh SQLite connection. Sharing a pre-fork SQLite connection leads
+	 * to "database disk image is malformed" errors when multiple processes
+	 * access the database concurrently (WAL checkpoint interference).
+	 *
+	 * The schema data is already in memory (in copySpecs), so closing here
+	 * is safe. Each subprocess reopens the catalog as needed.
+	 */
+	if (!catalog_close_from_specs(copySpecs))
+	{
+		log_warn("Failed to close catalogs before fork");
+	}
+
+	/*
 	 * Preparation and snapshot are now done, time to fork our two main worker
 	 * processes.
 	 */
@@ -428,7 +442,7 @@ clone_and_follow(CopyDataSpec *copySpecs)
 	{
 		log_info("STEP 10: restore the post-data section to the target database");
 
-		/* Open the catalog in this process (PID B closed its copy on exit) */
+		/* Open the catalog in this process (closed before fork) */
 		if (!catalog_open_from_specs(copySpecs))
 		{
 			log_error("Failed to open catalogs for deferred index creation");
