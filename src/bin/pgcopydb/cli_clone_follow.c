@@ -359,6 +359,20 @@ clone_and_follow(CopyDataSpec *copySpecs)
 	}
 
 	/*
+	 * Close catalogs before forking so that each subprocess gets its own
+	 * fresh SQLite connection. Sharing a pre-fork SQLite connection leads
+	 * to "database disk image is malformed" errors when multiple processes
+	 * access the database concurrently (WAL checkpoint interference).
+	 *
+	 * The schema data is already in memory (in copySpecs), so closing here
+	 * is safe. Each subprocess reopens the catalog as needed.
+	 */
+	if (!catalog_close_from_specs(copySpecs))
+	{
+		log_warn("Failed to close catalogs before fork");
+	}
+
+	/*
 	 * Preparation and snapshot are now done, time to fork our two main worker
 	 * processes.
 	 */
@@ -415,22 +429,20 @@ clone_and_follow(CopyDataSpec *copySpecs)
 	 * building indexes. Run STEP 10 here so index workers are direct
 	 * children of this process — their semaphores survive CDC failures.
 	 *
-	 * We must enable CDC apply (sentinel_update_apply) BEFORE calling
-	 * copydb_target_finalize_schema, because that function internally calls
-	 * copydb_wait_for_subprocesses which uses waitpid(-1) — waiting for ALL
-	 * children including the follow process (PID C). PID C won't exit until
-	 * CDC apply finishes, so sentinel apply must be enabled first to avoid
-	 * deadlock. This means CDC applies DML while indexes are being built,
-	 * which is safe: primary keys exist from pre-data restore.
+	 * Build indexes and restore post-data (FK constraints, triggers) BEFORE
+	 * enabling CDC apply. This ensures referential integrity constraints are
+	 * in place when DML replay begins, so cascading deletes work correctly.
 	 *
-	 * Because copydb_wait_for_subprocesses reaps PID C, we set followPID to
-	 * -1 afterward to skip the redundant follow wait below.
+	 * copydb_copy_all_indexes uses targeted waitpid (supervisor PID only)
+	 * when deferIndexes && follow, so the follow process (PID C) is not
+	 * accidentally reaped here. PID C is waited on below at the normal
+	 * follow wait.
 	 */
 	if (copySpecs->deferIndexes)
 	{
 		log_info("STEP 10: restore the post-data section to the target database");
 
-		/* Open the catalog in this process (PID B closed its copy on exit) */
+		/* Open the catalog in this process (closed before fork) */
 		if (!catalog_open_from_specs(copySpecs))
 		{
 			log_error("Failed to open catalogs for deferred index creation");
@@ -438,20 +450,24 @@ clone_and_follow(CopyDataSpec *copySpecs)
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
-		/* Enable CDC apply before building indexes (see comment above) */
+		/* Build indexes + restore post-data (FK constraints, triggers) */
+		if (!copydb_target_finalize_schema(copySpecs))
+		{
+			log_error("Failed to finalize schema, see above for details");
+			(void) copydb_fatal_exit();
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		/*
+		 * Now that FK constraints and triggers are in place, enable CDC
+		 * apply so the follow process can start replaying changes.
+		 */
 		DatabaseCatalog *sourceDB = &(copySpecs->catalogs.source);
 
 		log_info("Updating the pgcopydb.sentinel to enable applying changes");
 
 		if (!sentinel_update_apply(sourceDB, true))
 		{
-			(void) copydb_fatal_exit();
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-
-		if (!copydb_target_finalize_schema(copySpecs))
-		{
-			log_error("Failed to finalize schema, see above for details");
 			(void) copydb_fatal_exit();
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
@@ -473,12 +489,6 @@ clone_and_follow(CopyDataSpec *copySpecs)
 		{
 			log_error("Failed to close catalogs after deferred index creation");
 		}
-
-		/*
-		 * copydb_wait_for_subprocesses (inside copydb_target_finalize_schema)
-		 * already reaped PID C via waitpid(-1). Skip the follow wait below.
-		 */
-		followPID = -1;
 	}
 
 	/* now wait until the follow process is finished, if it's been started */

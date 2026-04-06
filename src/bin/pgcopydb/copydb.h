@@ -195,6 +195,7 @@ typedef struct PreviousRunState
 	bool schemaDumpIsDone;
 	bool schemaPreDataHasBeenRestored;
 	bool schemaPostDataHasBeenRestored;
+	bool deferredIndexesBuilt;
 
 	bool tableCopyIsDone;
 	bool indexCopyIsDone;
@@ -308,6 +309,7 @@ bool copydb_export_snapshot(TransactionSnapshot *snapshot);
 
 bool copydb_fatal_exit(void);
 bool copydb_wait_for_subprocesses(bool failFast);
+bool copydb_wait_for_pid(pid_t pid);
 
 bool copydb_register_sysv_semaphore(SysVResArray *array, Semaphore *semaphore);
 bool copydb_register_sysv_queue(SysVResArray *array, Queue *queue);
@@ -353,7 +355,7 @@ bool timescaledb_pre_restore(CopyDataSpec *copySpecs, SourceExtension *ext);
 bool timescaledb_post_restore(CopyDataSpec *copySpecs, SourceExtension *ext);
 
 /* indexes.c */
-bool copydb_start_index_supervisor(CopyDataSpec *specs);
+bool copydb_start_index_supervisor(CopyDataSpec *specs, pid_t *supervisorPID);
 bool copydb_index_supervisor(CopyDataSpec *specs);
 bool copydb_start_index_workers(CopyDataSpec *specs);
 bool copydb_index_worker(CopyDataSpec *specs);

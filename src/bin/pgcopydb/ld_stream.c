@@ -1627,7 +1627,24 @@ stream_sync_sentinel(LogicalStreamContext *context)
 	privateContext->startpos = sentinel.startpos;
 
 	context->endpos = sentinel.endpos;
-	context->tracking->applied_lsn = sentinel.replay_lsn;
+
+	/*
+	 * When apply hasn't started yet (sentinel.apply is false and replay_lsn
+	 * is zero or at the start position), report flushed_lsn as the applied
+	 * position. This ensures the source server's pg_stat_replication and
+	 * the slot's confirmed_flush_lsn reflect actual prefetch progress
+	 * rather than showing a stale snapshot LSN during long index builds.
+	 */
+	if (!privateContext->apply &&
+		(sentinel.replay_lsn == InvalidXLogRecPtr ||
+		 sentinel.replay_lsn == privateContext->startpos))
+	{
+		context->tracking->applied_lsn = context->tracking->flushed_lsn;
+	}
+	else
+	{
+		context->tracking->applied_lsn = sentinel.replay_lsn;
+	}
 
 	log_debug("stream_sync_sentinel: "
 			  "write_lsn %X/%X flush_lsn %X/%X apply_lsn %X/%X "

@@ -568,24 +568,50 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 	 *
 	 * Workers record completions in the summary catalog, so the restore
 	 * list hook will comment out these entries automatically.
+	 *
+	 * A separate TIMING_SECTION_INDEXES_BUILT checkpoint is recorded after
+	 * index building completes so that resume can skip this step if it
+	 * already finished in a previous run.
 	 */
 	if (specs->deferIndexes && specs->follow)
 	{
-		log_info("Creating deferred indexes and constraints using "
-				 "%d parallel workers", specs->indexJobs);
-
-		bool savedSkipVacuum = specs->skipVacuum;
-		specs->skipVacuum = true;
-
-		bool ok = copydb_copy_all_indexes(specs);
-
-		specs->skipVacuum = savedSkipVacuum;
-
-		if (!ok)
+		if (specs->runState.deferredIndexesBuilt)
 		{
-			log_error("Failed to create deferred indexes, "
-					  "see above for details");
-			return false;
+			log_info("Skipping deferred index creation, "
+					 "done on a previous run");
+		}
+		else
+		{
+			log_info("Creating deferred indexes and constraints using "
+					 "%d parallel workers", specs->indexJobs);
+
+			if (!summary_start_timing(sourceDB,
+									  TIMING_SECTION_INDEXES_BUILT))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			bool savedSkipVacuum = specs->skipVacuum;
+			specs->skipVacuum = true;
+
+			bool ok = copydb_copy_all_indexes(specs);
+
+			specs->skipVacuum = savedSkipVacuum;
+
+			if (!ok)
+			{
+				log_error("Failed to create deferred indexes, "
+						  "see above for details");
+				return false;
+			}
+
+			if (!summary_stop_timing(sourceDB,
+									 TIMING_SECTION_INDEXES_BUILT))
+			{
+				/* errors have already been logged */
+				return false;
+			}
 		}
 	}
 

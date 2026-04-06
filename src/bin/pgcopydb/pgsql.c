@@ -4090,14 +4090,28 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 
 			client->last_status = client->now;
 
-			/* the endpos target might have been updated in the past */
+			/*
+			 * The endpos target might have been updated from the
+			 * sentinel after we already streamed past it. When this
+			 * happens, stop streaming — we have all the WAL we need.
+			 */
 			if (context->endpos != InvalidXLogRecPtr &&
 				context->endpos <= cur_record_lsn)
 			{
-				log_warn("New endpos %X/%X is in the past, current "
-						 "record LSN is %X/%X",
-						 LSN_FORMAT_ARGS(context->endpos),
-						 LSN_FORMAT_ARGS(cur_record_lsn));
+				log_info("Streamed up to write_lsn %X/%X, "
+						 "flush_lsn %X/%X, stopping: "
+						 "endpos is %X/%X",
+						 LSN_FORMAT_ARGS(client->current.written_lsn),
+						 LSN_FORMAT_ARGS(client->current.flushed_lsn),
+						 LSN_FORMAT_ARGS(context->endpos));
+
+				if (!flushAndSendFeedback(client, context))
+				{
+					goto error;
+				}
+				prepareToTerminate(client, false, cur_record_lsn);
+				time_to_abort = true;
+				break;
 			}
 		}
 

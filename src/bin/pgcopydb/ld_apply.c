@@ -96,6 +96,7 @@ stream_apply_catchup(StreamSpecs *specs)
 	 * such file exists.
 	 */
 	char currentSQLFileName[MAXPGPATH] = { 0 };
+	bool appliedAnyFile = false;
 
 	for (;;)
 	{
@@ -107,17 +108,48 @@ stream_apply_catchup(StreamSpecs *specs)
 		}
 
 		/*
-		 * It might be the expected file doesn't exist already, in that case
-		 * exit successfully so that the main process may switch from catchup
-		 * mode to replay mode.
+		 * When the expected SQL file doesn't exist yet and we haven't
+		 * applied any file, wait briefly — the prefetch and transform
+		 * processes may still be creating it (this happens when
+		 * --defer-indexes delays apply start until after index building).
+		 *
+		 * For subsequent files (after applying at least one), exit
+		 * immediately so the main process can switch to replay mode.
 		 */
 		if (!file_exists(context.sqlFileName))
 		{
-			log_info("File \"%s\" does not exists yet, exit",
-					 context.sqlFileName);
+			if (!appliedAnyFile)
+			{
+				int maxWaitSecs = 30;
 
-			(void) stream_apply_cleanup(&context);
-			return true;
+				for (int i = 0; i < maxWaitSecs; i++)
+				{
+					log_info("File \"%s\" does not exist yet, "
+							 "waiting (%d/%d)...",
+							 context.sqlFileName, i + 1, maxWaitSecs);
+
+					pg_usleep(1000 * 1000); /* 1 second */
+
+					if (file_exists(context.sqlFileName))
+					{
+						break;
+					}
+
+					if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
+					{
+						break;
+					}
+				}
+			}
+
+			if (!file_exists(context.sqlFileName))
+			{
+				log_info("File \"%s\" does not exist yet, exit",
+						 context.sqlFileName);
+
+				(void) stream_apply_cleanup(&context);
+				return true;
+			}
 		}
 
 		/*
@@ -129,6 +161,8 @@ stream_apply_catchup(StreamSpecs *specs)
 			(void) stream_apply_cleanup(&context);
 			return false;
 		}
+
+		appliedAnyFile = true;
 
 		/*
 		 * When syncing with the pgcopydb sentinel we might receive a new

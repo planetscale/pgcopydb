@@ -152,7 +152,7 @@ copydb_process_table_data(CopyDataSpec *specs)
 			log_info("STEP 7: skipping constraints (--defer-indexes)");
 			log_info("STEP 8: skipping VACUUM (--defer-indexes)");
 		}
-		else if (errors == 0 && !copydb_start_index_supervisor(specs))
+		else if (errors == 0 && !copydb_start_index_supervisor(specs, NULL))
 		{
 			/* errors have already been logged */
 			++errors;
