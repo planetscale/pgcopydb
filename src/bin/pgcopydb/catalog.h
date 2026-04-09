@@ -432,6 +432,34 @@ bool catalog_iter_s_index_finish(SourceIndexIterator *iter);
 
 bool catalog_s_index_fetch(SQLiteQuery *query);
 
+
+/*
+ * FK Constraints (not attached to indexes, handled separately from pg_restore)
+ */
+bool catalog_add_s_fk_constraint(DatabaseCatalog *catalog,
+								 SourceFKConstraint *fk);
+
+typedef bool (SourceFKConstraintIterFun)(void *context,
+										 SourceFKConstraint *fk);
+
+bool catalog_iter_s_fk_constraint(DatabaseCatalog *catalog,
+								  void *context,
+								  SourceFKConstraintIterFun *callback);
+
+typedef struct SourceFKConstraintIterator
+{
+	DatabaseCatalog *catalog;
+	SourceFKConstraint *fk;
+	SQLiteQuery query;
+} SourceFKConstraintIterator;
+
+bool catalog_iter_s_fk_constraint_init(SourceFKConstraintIterator *iter);
+bool catalog_iter_s_fk_constraint_next(SourceFKConstraintIterator *iter);
+bool catalog_iter_s_fk_constraint_finish(SourceFKConstraintIterator *iter);
+
+bool catalog_s_fk_constraint_fetch(SQLiteQuery *query);
+
+
 /*
  * Sequences
  */

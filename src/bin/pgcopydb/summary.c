@@ -1557,6 +1557,209 @@ summary_finish_constraint(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 
 
 /*
+ * summary_lookup_fk_constraint looks up an FK constraint in the
+ * fk_constraint_summary table to check if it has already been processed.
+ */
+bool
+summary_lookup_fk_constraint(DatabaseCatalog *catalog, uint32_t conoid,
+							 bool *done)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: summary_lookup_fk_constraint: db is NULL");
+		return false;
+	}
+
+	*done = false;
+
+	char *sql =
+		"  select done_time_epoch "
+		"    from fk_constraint_summary "
+		"   where conoid = $1";
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "conoid", conoid, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	int rc = catalog_sql_step(&query);
+
+	if (rc == SQLITE_ROW)
+	{
+		int64_t doneTime = sqlite3_column_int64(query.ppStmt, 0);
+		*done = doneTime > 0;
+	}
+
+	if (!catalog_sql_finalize(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
+ * summary_add_fk_constraint inserts a new FK constraint summary entry to track
+ * the start of FK constraint creation.
+ */
+bool
+summary_add_fk_constraint(DatabaseCatalog *catalog, SourceFKConstraint *fk,
+						  const char *command)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: summary_add_fk_constraint: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"insert or replace into fk_constraint_summary"
+		"(pid, conoid, start_time_epoch, command)"
+		"values($1, $2, $3, $4)";
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "pid", getpid(), NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "conoid", fk->oid, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "start_time_epoch", time(NULL), NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "command", 0, (char *) command }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
+ * summary_finish_fk_constraint updates the FK constraint summary with
+ * completion time and whether it was created as NOT VALID.
+ */
+bool
+summary_finish_fk_constraint(DatabaseCatalog *catalog, SourceFKConstraint *fk,
+							 uint64_t durationMs, bool notValid)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: summary_finish_fk_constraint: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"update fk_constraint_summary "
+		"   set done_time_epoch = $1, duration = $2, not_valid = $3 "
+		" where pid = $4 and conoid = $5";
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "done_time_epoch", time(NULL), NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "duration", durationMs, NULL },
+		{ BIND_PARAMETER_TYPE_INT, "not_valid", notValid ? 1 : 0, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "pid", getpid(), NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "conoid", fk->oid, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
  * summary_table_all_indexes_done sets tableSpecs->allIndexesAreDone to true
  * when all the indexes have already been done in the summary table of our
  * internal catalogs.

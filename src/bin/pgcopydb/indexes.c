@@ -1381,3 +1381,339 @@ copydb_collect_constraint_indexes_hook(void *ctx, SourceIndex *index)
 
 	return true;
 }
+
+
+/*
+ * copydb_collect_fk_constraints_hook is an iterator callback that collects
+ * FK constraints into a SourceFKConstraintArray for later processing.
+ */
+static bool
+copydb_collect_fk_constraints_hook(void *ctx, SourceFKConstraint *fk)
+{
+	SourceFKConstraintArray *fkArray = (SourceFKConstraintArray *) ctx;
+
+	/* grow the array if needed */
+	if (fkArray->count >= fkArray->capacity)
+	{
+		int newCap = fkArray->capacity == 0 ? 8 : fkArray->capacity * 2;
+		SourceFKConstraint *newArray =
+			(SourceFKConstraint *) realloc(fkArray->array,
+										   newCap * sizeof(SourceFKConstraint));
+
+		if (newArray == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		fkArray->array = newArray;
+		fkArray->capacity = newCap;
+	}
+
+	/* copy the struct (constraintDef pointer needs to be strdup'd) */
+	fkArray->array[fkArray->count] = *fk;
+
+	if (fk->constraintDef != NULL)
+	{
+		fkArray->array[fkArray->count].constraintDef = strdup(fk->constraintDef);
+
+		if (fkArray->array[fkArray->count].constraintDef == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+	}
+
+	fkArray->count++;
+
+	return true;
+}
+
+
+/*
+ * copydb_create_fk_constraints creates all FK constraints that were fetched
+ * from the source catalog. For each constraint:
+ *
+ *  1. Try: ALTER TABLE <table> ADD CONSTRAINT <name> <def>
+ *  2. On SQLSTATE 23503: retry with NOT VALID appended.
+ *  3. Record result in summary catalog.
+ *
+ * FK constraints are handled separately from pg_restore to allow per-constraint
+ * error handling and automatic NOT VALID retry.
+ */
+bool
+copydb_create_fk_constraints(CopyDataSpec *specs)
+{
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	/*
+	 * Phase 1: Collect FK constraints while holding the catalog semaphore.
+	 */
+	SourceFKConstraintArray fkArray = { 0, 0, NULL };
+
+	if (!catalog_iter_s_fk_constraint(sourceDB,
+									  &fkArray,
+									  &copydb_collect_fk_constraints_hook))
+	{
+		/* errors have already been logged */
+		free(fkArray.array);
+		return false;
+	}
+
+	if (fkArray.count == 0)
+	{
+		log_info("No FK constraints to create");
+		return true;
+	}
+
+	log_info("Creating %d FK constraints", fkArray.count);
+
+	/*
+	 * Phase 2: Create FK constraints on the target.
+	 */
+	PGSQL dst = { 0 };
+
+	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+	{
+		log_error("Failed to initialize connection to target database");
+		free(fkArray.array);
+		return false;
+	}
+
+	bool success = true;
+	int notValidCount = 0;
+	int sourceNotValidCount = 0;
+
+	for (int i = 0; i < fkArray.count; i++)
+	{
+		SourceFKConstraint *fk = &(fkArray.array[i]);
+
+		/*
+		 * Resume support: check if this FK constraint has already been
+		 * processed in a previous run.
+		 */
+		bool alreadyDone = false;
+
+		if (!summary_lookup_fk_constraint(sourceDB, fk->oid, &alreadyDone))
+		{
+			/* errors have already been logged */
+			success = false;
+			break;
+		}
+
+		if (alreadyDone)
+		{
+			log_notice("Skipping already processed FK constraint \"%s\" on %s",
+					   fk->conname, fk->tableQname);
+			continue;
+		}
+
+		/*
+		 * If the constraint is already NOT VALID on the source, create it
+		 * as NOT VALID directly — no need to try normal creation first.
+		 * pg_get_constraintdef() already includes NOT VALID in the output
+		 * for such constraints, so the constraintDef handles this, but we
+		 * log it explicitly for clarity.
+		 */
+		if (!fk->convalidated)
+		{
+			log_notice("FK constraint \"%s\" on %s is NOT VALID on source, "
+					   "creating as NOT VALID on target",
+					   fk->conname, fk->tableQname);
+			sourceNotValidCount++;
+		}
+
+		/*
+		 * Build the ALTER TABLE ADD CONSTRAINT command.
+		 */
+		PQExpBuffer cmd = createPQExpBuffer();
+
+		appendPQExpBuffer(cmd,
+						  "ALTER TABLE %s ADD CONSTRAINT %s %s",
+						  fk->tableQname,
+						  fk->conname,
+						  fk->constraintDef);
+
+		if (fk->condeferrable)
+		{
+			appendPQExpBufferStr(cmd, " DEFERRABLE");
+
+			if (fk->condeferred)
+			{
+				appendPQExpBufferStr(cmd, " INITIALLY DEFERRED");
+			}
+		}
+
+		if (PQExpBufferBroken(cmd))
+		{
+			log_error("Failed to create query for FK constraint \"%s\": "
+					  "out of memory", fk->conname);
+			destroyPQExpBuffer(cmd);
+			success = false;
+			break;
+		}
+
+		/* record the start of this constraint creation */
+		if (!summary_add_fk_constraint(sourceDB, fk, cmd->data))
+		{
+			/* errors have already been logged */
+			destroyPQExpBuffer(cmd);
+			success = false;
+			break;
+		}
+
+		instr_time startTime;
+		INSTR_TIME_SET_CURRENT(startTime);
+
+		log_notice("Creating FK constraint: %s", cmd->data);
+
+		bool notValid = false;
+
+		if (!pgsql_execute(&dst, cmd->data))
+		{
+			/*
+			 * Check if the failure is due to a foreign key violation
+			 * (SQLSTATE 23503). If so, retry with NOT VALID.
+			 */
+			if (strcmp(dst.sqlstate,
+					   STR_ERRCODE_FOREIGN_KEY_VIOLATION) == 0)
+			{
+				log_warn("FK constraint \"%s\" on %s has pre-existing data "
+						 "violations, retrying with NOT VALID",
+						 fk->conname, fk->tableQname);
+
+				/* rebuild the command with NOT VALID */
+				resetPQExpBuffer(cmd);
+
+				appendPQExpBuffer(cmd,
+								  "ALTER TABLE %s ADD CONSTRAINT %s %s",
+								  fk->tableQname,
+								  fk->conname,
+								  fk->constraintDef);
+
+				if (fk->condeferrable)
+				{
+					appendPQExpBufferStr(cmd, " DEFERRABLE");
+
+					if (fk->condeferred)
+					{
+						appendPQExpBufferStr(cmd, " INITIALLY DEFERRED");
+					}
+				}
+
+				appendPQExpBufferStr(cmd, " NOT VALID");
+
+				/* clear the error state for retry */
+				memset(dst.sqlstate, 0, sizeof(dst.sqlstate));
+
+				if (!pgsql_execute(&dst, cmd->data))
+				{
+					log_error("Failed to create FK constraint \"%s\" on %s "
+							  "even with NOT VALID",
+							  fk->conname, fk->tableQname);
+					destroyPQExpBuffer(cmd);
+					success = false;
+					break;
+				}
+
+				notValid = true;
+				notValidCount++;
+
+				log_warn("FK constraint \"%s\" on %s created as NOT VALID "
+						 "due to pre-existing data violations",
+						 fk->conname, fk->tableQname);
+			}
+			else if (strcmp(dst.sqlstate,
+							STR_ERRCODE_DUPLICATE_OBJECT) == 0)
+			{
+				/*
+				 * The constraint already exists on the target, likely
+				 * because it was defined inline in CREATE TABLE and
+				 * created during the pre-data pg_restore phase.
+				 */
+				log_notice("FK constraint \"%s\" on %s already exists "
+						   "on target, skipping",
+						   fk->conname, fk->tableQname);
+				memset(dst.sqlstate, 0, sizeof(dst.sqlstate));
+			}
+			else if (strcmp(dst.sqlstate,
+							STR_ERRCODE_INVALID_SCHEMA_NAME) == 0 ||
+					 strcmp(dst.sqlstate,
+							STR_ERRCODE_UNDEFINED_TABLE) == 0)
+			{
+				/*
+				 * The referenced table or schema does not exist on the
+				 * target, likely because it was filtered out. Skip this
+				 * FK constraint gracefully.
+				 */
+				log_notice("Skipping FK constraint \"%s\" on %s: "
+						   "referenced table or schema does not exist "
+						   "on target (likely filtered out)",
+						   fk->conname, fk->tableQname);
+				memset(dst.sqlstate, 0, sizeof(dst.sqlstate));
+			}
+			else
+			{
+				log_error("Failed to create FK constraint \"%s\" on %s",
+						  fk->conname, fk->tableQname);
+				destroyPQExpBuffer(cmd);
+				success = false;
+				break;
+			}
+		}
+
+		destroyPQExpBuffer(cmd);
+
+		/* compute duration */
+		instr_time duration;
+		INSTR_TIME_SET_CURRENT(duration);
+		INSTR_TIME_SUBTRACT(duration, startTime);
+		uint64_t durationMs = INSTR_TIME_GET_MILLISEC(duration);
+
+		if (!summary_finish_fk_constraint(sourceDB, fk, durationMs, notValid))
+		{
+			/* errors have already been logged */
+			success = false;
+			break;
+		}
+
+		if (!summary_increment_timing(sourceDB,
+									  TIMING_SECTION_ALTER_TABLE,
+									  1,    /* count */
+									  0,    /* bytes */
+									  durationMs))
+		{
+			/* errors have already been logged */
+			success = false;
+			break;
+		}
+	}
+
+	if (sourceNotValidCount > 0)
+	{
+		log_notice("%d FK constraint(s) were already NOT VALID on the "
+				   "source database and created as NOT VALID on target",
+				   sourceNotValidCount);
+	}
+
+	if (notValidCount > 0)
+	{
+		log_warn("%d FK constraint(s) created as NOT VALID due to "
+				 "pre-existing data violations on the source database",
+				 notValidCount);
+	}
+
+	/* cleanup */
+	for (int i = 0; i < fkArray.count; i++)
+	{
+		if (fkArray.array[i].constraintDef != NULL)
+		{
+			free(fkArray.array[i].constraintDef);
+		}
+	}
+
+	free(fkArray.array);
+	(void) pgsql_finish(&dst);
+
+	return success;
+}

@@ -988,6 +988,18 @@ copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql)
 		return false;
 	}
 
+	/*
+	 * Fetch FK constraints separately from indexes. FK constraints are not
+	 * attached to indexes via pg_depend, so they are not captured by
+	 * schema_list_all_indexes. pgcopydb handles FK constraint creation
+	 * directly instead of delegating to pg_restore.
+	 */
+	if (!schema_list_fk_constraints(pgsql, &(specs->filters), sourceDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	(void) catalog_stop_timing(&timing);
 
 	if (!catalog_register_section(sourceDB, &timing))

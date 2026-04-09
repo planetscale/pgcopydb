@@ -391,6 +391,7 @@ bool copydb_prepare_create_index_command(CopyIndexSpec *indexSpecs,
 bool copydb_prepare_create_constraint_command(CopyIndexSpec *indexSpecs);
 
 bool copydb_create_constraints(CopyDataSpec *spec, PGSQL *dst, SourceTable *table);
+bool copydb_create_fk_constraints(CopyDataSpec *specs);
 
 /* dump_restore.c */
 bool copydb_dump_source_schema(CopyDataSpec *specs, const char *snapshot);
@@ -583,6 +584,14 @@ bool summary_add_constraint(DatabaseCatalog *catalog,
 
 bool summary_finish_constraint(DatabaseCatalog *catalog,
 							   CopyIndexSpec *indexSpecs);
+
+bool summary_lookup_fk_constraint(DatabaseCatalog *catalog, uint32_t conoid,
+								  bool *done);
+bool summary_add_fk_constraint(DatabaseCatalog *catalog,
+							   SourceFKConstraint *fk, const char *command);
+bool summary_finish_fk_constraint(DatabaseCatalog *catalog,
+								  SourceFKConstraint *fk,
+								  uint64_t durationMs, bool notValid);
 
 bool summary_table_count_indexes_left(DatabaseCatalog *catalog,
 									  CopyTableDataSpec *tableSpecs);
