@@ -3190,6 +3190,147 @@ struct FilteringQueries listSourceDependSQL[] = {
 };
 
 
+/* context for FK constraint query result parsing */
+typedef struct SourceFKConstraintContext
+{
+	DatabaseCatalog *catalog;
+	bool parsedOk;
+} SourceFKConstraintContext;
+
+static void getFKConstraintArray(void *ctx, PGresult *result);
+
+
+/*
+ * schema_list_fk_constraints grabs the list of foreign key constraints from
+ * the given source Postgres instance and stores them in the catalog.
+ *
+ * FK constraints are handled separately from index-backed constraints because
+ * they don't have an associated index in pg_depend. pgcopydb creates them
+ * directly (rather than delegating to pg_restore) to support automatic
+ * NOT VALID retry when pre-existing data violations are found.
+ */
+bool
+schema_list_fk_constraints(PGSQL *pgsql,
+						   SourceFilters *filters,
+						   DatabaseCatalog *catalog)
+{
+	SourceFKConstraintContext context = { catalog, false };
+
+	log_trace("schema_list_fk_constraints");
+
+	char *sql =
+		"SELECT c.oid, "
+		"       format('%I', c.conname), "
+		"       n.nspname, "
+		"       r.relname, "
+		"       format('%I.%I', n.nspname, r.relname), "
+		"       pg_get_constraintdef(c.oid), "
+		"       c.condeferrable, "
+		"       c.condeferred "
+		"  FROM pg_constraint c "
+		"  JOIN pg_class r ON c.conrelid = r.oid "
+		"  JOIN pg_namespace n ON r.relnamespace = n.oid "
+		" WHERE c.contype = 'f' "
+		"   AND n.nspname !~ '^pg_' "
+		"   AND n.nspname <> 'information_schema' "
+		" ORDER BY n.nspname, r.relname, c.conname";
+
+	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+								   &context, &getFKConstraintArray))
+	{
+		log_error("Failed to list FK constraints");
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to list FK constraints");
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * getFKConstraintArray loops over the SQL result for FK constraints and
+ * adds each one to the catalog.
+ */
+static void
+getFKConstraintArray(void *ctx, PGresult *result)
+{
+	SourceFKConstraintContext *context = (SourceFKConstraintContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	log_debug("schema_list_fk_constraints: %d FK constraints", nTuples);
+
+	context->parsedOk = true;
+
+	for (int rowNumber = 0; rowNumber < nTuples; rowNumber++)
+	{
+		SourceFKConstraint fk = { 0 };
+		char *value = NULL;
+
+		/* oid */
+		value = PQgetvalue(result, rowNumber, 0);
+
+		if (!stringToUInt32(value, &(fk.oid)))
+		{
+			log_error("Invalid OID \"%s\"", value);
+			context->parsedOk = false;
+			return;
+		}
+
+		/* conname */
+		value = PQgetvalue(result, rowNumber, 1);
+		strlcpy(fk.conname, value, sizeof(fk.conname));
+
+		/* nspname */
+		value = PQgetvalue(result, rowNumber, 2);
+		strlcpy(fk.nspname, value, sizeof(fk.nspname));
+
+		/* relname */
+		value = PQgetvalue(result, rowNumber, 3);
+		strlcpy(fk.relname, value, sizeof(fk.relname));
+
+		/* tableQname */
+		value = PQgetvalue(result, rowNumber, 4);
+		strlcpy(fk.tableQname, value, sizeof(fk.tableQname));
+
+		/* constraintDef */
+		value = PQgetvalue(result, rowNumber, 5);
+
+		if (value != NULL && !PQgetisnull(result, rowNumber, 5))
+		{
+			fk.constraintDef = strdup(value);
+
+			if (fk.constraintDef == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				context->parsedOk = false;
+				return;
+			}
+		}
+
+		/* condeferrable */
+		value = PQgetvalue(result, rowNumber, 6);
+		fk.condeferrable = (*value == 't');
+
+		/* condeferred */
+		value = PQgetvalue(result, rowNumber, 7);
+		fk.condeferred = (*value == 't');
+
+		if (!catalog_add_s_fk_constraint(context->catalog, &fk))
+		{
+			log_error("Failed to add FK constraint \"%s\" to catalog",
+					  fk.conname);
+			context->parsedOk = false;
+			return;
+		}
+	}
+}
+
+
 /*
  * schema_list_pg_depend recursively walks the pg_catalog.pg_depend view and
  * builds the list of objects that depend on tables that are filtered-out from

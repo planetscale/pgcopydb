@@ -313,6 +313,36 @@ typedef struct SourceIndexArray
 
 
 /*
+ * SourceFKConstraint caches foreign key constraint information from the source
+ * database. FK constraints are handled separately from index-backed constraints
+ * (PK/UNIQUE) because they don't have an associated index in pg_depend.
+ *
+ * pgcopydb creates FK constraints directly rather than delegating to
+ * pg_restore, which allows automatic retry with NOT VALID when pre-existing
+ * data violations are detected (SQLSTATE 23503).
+ */
+typedef struct SourceFKConstraint
+{
+	uint32_t oid;
+	char conname[PG_NAMEDATALEN];
+	char nspname[PG_NAMEDATALEN];
+	char relname[PG_NAMEDATALEN];
+	char tableQname[PG_NAMEDATALEN_FQ];
+	char *constraintDef;        /* malloc'ed area */
+	bool condeferrable;
+	bool condeferred;
+} SourceFKConstraint;
+
+
+typedef struct SourceFKConstraintArray
+{
+	int count;
+	int capacity;
+	SourceFKConstraint *array;  /* malloc'ed area */
+} SourceFKConstraintArray;
+
+
+/*
  * SourceDepend caches the information about the dependency graph of
  * filtered-out objects. When filtering-out a table, we want to also filter-out
  * the foreign keys, views, materialized views and all that depend on this same
@@ -498,6 +528,10 @@ bool schema_list_all_indexes(PGSQL *pgsql,
 bool schema_list_pg_depend(PGSQL *pgsql,
 						   SourceFilters *filters,
 						   DatabaseCatalog *catalog);
+
+bool schema_list_fk_constraints(PGSQL *pgsql,
+								SourceFilters *filters,
+								DatabaseCatalog *catalog);
 
 bool schema_send_table_checksum(PGSQL *pgsql, SourceTable *table);
 bool schema_fetch_table_checksum(PGSQL *pgsql, TableChecksum *sum, bool *done);

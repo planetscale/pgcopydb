@@ -635,6 +635,18 @@ copydb_target_finalize_schema(CopyDataSpec *specs)
 	}
 
 	/*
+	 * Create FK constraints directly. FK CONSTRAINT entries were filtered
+	 * out of the pg_restore list above; pgcopydb handles them here with
+	 * automatic NOT VALID retry when pre-existing data violations are
+	 * found (SQLSTATE 23503).
+	 */
+	if (!copydb_create_fk_constraints(specs))
+	{
+		log_error("Failed to create FK constraints, see above for details");
+		return false;
+	}
+
+	/*
 	 * Some extensions such as timescaledb need a post restore step.
 	 */
 	if (!copydb_finalize_extensions_restore(specs))
@@ -779,6 +791,17 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 	{
 		skip = true;
 		log_notice("Skipping DATABASE \"%s\"", name);
+	}
+
+	/*
+	 * Always skip FK CONSTRAINT objects from pg_restore. pgcopydb handles
+	 * FK constraint creation directly, with automatic NOT VALID retry when
+	 * pre-existing data violations are found (SQLSTATE 23503).
+	 */
+	if (item->desc == ARCHIVE_TAG_FK_CONSTRAINT)
+	{
+		skip = true;
+		log_notice("Skipping FK CONSTRAINT \"%s\" (handled by pgcopydb)", name);
 	}
 
 	/*

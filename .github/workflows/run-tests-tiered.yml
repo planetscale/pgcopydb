@@ -155,6 +155,7 @@ jobs:
           - endpos-in-multi-wal-txn
           - blob-snapshot-release
           - follow-defer-indexes
+          - fk-not-valid
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6

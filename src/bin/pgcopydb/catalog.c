@@ -145,6 +145,12 @@ static char *sourceDBcreateDDLs[] = {
 	"  condeferrable bool, condeferred bool, sql text "
 	")",
 
+	"create table s_fk_constraint("
+	"  oid integer primary key, conname text, "
+	"  nspname text, relname text, qname text, "
+	"  condeferrable bool, condeferred bool, constraintdef text "
+	")",
+
 	"create table s_seq("
 	"  oid integer, "
 	"  ownedby integer, attrelid integer, attroid integer, "
@@ -183,6 +189,15 @@ static char *sourceDBcreateDDLs[] = {
 	"  bytes integer, "
 	"  command text, "
 	"  unique(tableoid, partnum)"
+	")",
+
+	"create table fk_constraint_summary("
+	"  pid integer, "
+	"  conoid integer references s_fk_constraint(oid), "
+	"  start_time_epoch integer, done_time_epoch integer, duration integer, "
+	"  not_valid bool, "
+	"  command text, "
+	"  unique(conoid)"
 	")",
 
 	"create table vacuum_summary("
@@ -4809,6 +4824,297 @@ catalog_add_s_constraint(DatabaseCatalog *catalog, SourceIndex *index)
 
 	/* now execute the query, which does not return any row */
 	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_add_s_fk_constraint adds a foreign key constraint to the source
+ * catalog. FK constraints are tracked separately from index-backed constraints.
+ */
+bool
+catalog_add_s_fk_constraint(DatabaseCatalog *catalog, SourceFKConstraint *fk)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: catalog_add_s_fk_constraint: db is NULL");
+		return false;
+	}
+
+	char *sql =
+		"insert into s_fk_constraint("
+		"  oid, conname, nspname, relname, qname, "
+		"  condeferrable, condeferred, constraintdef) "
+		"values($1, $2, $3, $4, $5, $6, $7, $8)";
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "oid", fk->oid, NULL },
+		{ BIND_PARAMETER_TYPE_TEXT, "conname", 0, fk->conname },
+		{ BIND_PARAMETER_TYPE_TEXT, "nspname", 0, fk->nspname },
+		{ BIND_PARAMETER_TYPE_TEXT, "relname", 0, fk->relname },
+		{ BIND_PARAMETER_TYPE_TEXT, "qname", 0, fk->tableQname },
+
+		{ BIND_PARAMETER_TYPE_INT, "condeferrable",
+		  fk->condeferrable ? 1 : 0, NULL },
+		{ BIND_PARAMETER_TYPE_INT, "condeferred",
+		  fk->condeferred ? 1 : 0, NULL },
+
+		{ BIND_PARAMETER_TYPE_TEXT, "constraintdef", 0, fk->constraintDef }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_s_fk_constraint_fetch populates a SourceFKConstraint from a SQLite
+ * query result row.
+ */
+bool
+catalog_s_fk_constraint_fetch(SQLiteQuery *query)
+{
+	SourceFKConstraint *fk = (SourceFKConstraint *) query->context;
+
+	/* cleanup the memory area before re-use */
+	bzero(fk, sizeof(SourceFKConstraint));
+
+	fk->oid = sqlite3_column_int64(query->ppStmt, 0);
+
+	strlcpy(fk->conname,
+			(char *) sqlite3_column_text(query->ppStmt, 1),
+			sizeof(fk->conname));
+
+	strlcpy(fk->nspname,
+			(char *) sqlite3_column_text(query->ppStmt, 2),
+			sizeof(fk->nspname));
+
+	strlcpy(fk->relname,
+			(char *) sqlite3_column_text(query->ppStmt, 3),
+			sizeof(fk->relname));
+
+	strlcpy(fk->tableQname,
+			(char *) sqlite3_column_text(query->ppStmt, 4),
+			sizeof(fk->tableQname));
+
+	fk->condeferrable = sqlite3_column_int(query->ppStmt, 5) == 1;
+	fk->condeferred = sqlite3_column_int(query->ppStmt, 6) == 1;
+
+	if (sqlite3_column_type(query->ppStmt, 7) != SQLITE_NULL)
+	{
+		int len = sqlite3_column_bytes(query->ppStmt, 7);
+		int bytes = len + 1;
+
+		fk->constraintDef = (char *) calloc(bytes, sizeof(char));
+
+		if (fk->constraintDef == NULL)
+		{
+			log_fatal(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		strlcpy(fk->constraintDef,
+				(char *) sqlite3_column_text(query->ppStmt, 7),
+				bytes);
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_iter_s_fk_constraint iterates over all FK constraints in the source
+ * catalog, calling the provided callback for each one.
+ */
+bool
+catalog_iter_s_fk_constraint(DatabaseCatalog *catalog,
+							 void *context,
+							 SourceFKConstraintIterFun *callback)
+{
+	SourceFKConstraintIterator *iter =
+		(SourceFKConstraintIterator *) calloc(1,
+											  sizeof(SourceFKConstraintIterator));
+
+	if (iter == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	iter->catalog = catalog;
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		free(iter);
+		return false;
+	}
+
+	if (!catalog_iter_s_fk_constraint_init(iter))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		free(iter);
+		return false;
+	}
+
+	for (;;)
+	{
+		if (!catalog_iter_s_fk_constraint_next(iter))
+		{
+			/* errors have already been logged */
+			(void) semaphore_unlock(&(catalog->sema));
+			return false;
+		}
+
+		SourceFKConstraint *fk = iter->fk;
+
+		if (fk == NULL)
+		{
+			if (!catalog_iter_s_fk_constraint_finish(iter))
+			{
+				/* errors have already been logged */
+				(void) semaphore_unlock(&(catalog->sema));
+				return false;
+			}
+
+			break;
+		}
+
+		/* now call the provided callback */
+		if (!(*callback)(context, fk))
+		{
+			log_error("Failed to iterate over list of FK constraints, "
+					  "see above for details");
+			(void) semaphore_unlock(&(catalog->sema));
+			return false;
+		}
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
+ * catalog_iter_s_fk_constraint_init prepares the SQLite query for iterating
+ * over FK constraints.
+ */
+bool
+catalog_iter_s_fk_constraint_init(SourceFKConstraintIterator *iter)
+{
+	sqlite3 *db = iter->catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: Failed to initialize s_fk_constraint iterator: "
+				  "db is NULL");
+		return false;
+	}
+
+	iter->fk = (SourceFKConstraint *) calloc(1, sizeof(SourceFKConstraint));
+
+	if (iter->fk == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	char *sql =
+		"  select oid, conname, nspname, relname, qname, "
+		"         condeferrable, condeferred, constraintdef "
+		"    from s_fk_constraint "
+		"order by nspname, relname, conname";
+
+	SQLiteQuery *query = &(iter->query);
+
+	query->context = iter->fk;
+	query->fetchFunction = &catalog_s_fk_constraint_fetch;
+
+	if (!catalog_sql_prepare(db, sql, query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * catalog_iter_s_fk_constraint_next steps to the next FK constraint row.
+ */
+bool
+catalog_iter_s_fk_constraint_next(SourceFKConstraintIterator *iter)
+{
+	SQLiteQuery *query = &(iter->query);
+
+	int rc = catalog_sql_step(query);
+
+	if (rc == SQLITE_DONE)
+	{
+		iter->fk = NULL;
+
+		return true;
+	}
+
+	if (rc != SQLITE_ROW)
+	{
+		log_error("Failed to step through statement: %s", query->sql);
+		log_error("[SQLite] %s", sqlite3_errmsg(query->db));
+		return false;
+	}
+
+	return catalog_s_fk_constraint_fetch(query);
+}
+
+
+/*
+ * catalog_iter_s_fk_constraint_finish cleans up the iterator.
+ */
+bool
+catalog_iter_s_fk_constraint_finish(SourceFKConstraintIterator *iter)
+{
+	SQLiteQuery *query = &(iter->query);
+
+	/* in case we finish before reaching the DONE step */
+	if (iter->fk != NULL)
+	{
+		iter->fk = NULL;
+	}
+
+	if (!catalog_sql_finalize(query))
 	{
 		/* errors have already been logged */
 		return false;
