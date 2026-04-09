@@ -1482,6 +1482,7 @@ copydb_create_fk_constraints(CopyDataSpec *specs)
 
 	bool success = true;
 	int notValidCount = 0;
+	int sourceNotValidCount = 0;
 
 	for (int i = 0; i < fkArray.count; i++)
 	{
@@ -1505,6 +1506,21 @@ copydb_create_fk_constraints(CopyDataSpec *specs)
 			log_notice("Skipping already processed FK constraint \"%s\" on %s",
 					   fk->conname, fk->tableQname);
 			continue;
+		}
+
+		/*
+		 * If the constraint is already NOT VALID on the source, create it
+		 * as NOT VALID directly — no need to try normal creation first.
+		 * pg_get_constraintdef() already includes NOT VALID in the output
+		 * for such constraints, so the constraintDef handles this, but we
+		 * log it explicitly for clarity.
+		 */
+		if (!fk->convalidated)
+		{
+			log_notice("FK constraint \"%s\" on %s is NOT VALID on source, "
+					   "creating as NOT VALID on target",
+					   fk->conname, fk->tableQname);
+			sourceNotValidCount++;
 		}
 
 		/*
@@ -1671,6 +1687,13 @@ copydb_create_fk_constraints(CopyDataSpec *specs)
 			success = false;
 			break;
 		}
+	}
+
+	if (sourceNotValidCount > 0)
+	{
+		log_notice("%d FK constraint(s) were already NOT VALID on the "
+				   "source database and created as NOT VALID on target",
+				   sourceNotValidCount);
 	}
 
 	if (notValidCount > 0)

@@ -331,6 +331,7 @@ typedef struct SourceFKConstraint
 	char *constraintDef;        /* malloc'ed area */
 	bool condeferrable;
 	bool condeferred;
+	bool convalidated;          /* false when NOT VALID on source */
 } SourceFKConstraint;
 
 

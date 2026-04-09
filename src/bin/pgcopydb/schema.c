@@ -3226,13 +3226,18 @@ schema_list_fk_constraints(PGSQL *pgsql,
 		"       format('%I.%I', n.nspname, r.relname), "
 		"       pg_get_constraintdef(c.oid), "
 		"       c.condeferrable, "
-		"       c.condeferred "
+		"       c.condeferred, "
+		"       c.convalidated "
 		"  FROM pg_constraint c "
 		"  JOIN pg_class r ON c.conrelid = r.oid "
 		"  JOIN pg_namespace n ON r.relnamespace = n.oid "
+		"  JOIN pg_class ref ON c.confrelid = ref.oid "
+		"  JOIN pg_namespace rn ON ref.relnamespace = rn.oid "
 		" WHERE c.contype = 'f' "
 		"   AND n.nspname !~ '^pg_' "
 		"   AND n.nspname <> 'information_schema' "
+		"   AND rn.nspname !~ '^pg_' "
+		"   AND rn.nspname <> 'information_schema' "
 		" ORDER BY n.nspname, r.relname, c.conname";
 
 	if (!pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
@@ -3319,6 +3324,10 @@ getFKConstraintArray(void *ctx, PGresult *result)
 		/* condeferred */
 		value = PQgetvalue(result, rowNumber, 7);
 		fk.condeferred = (*value == 't');
+
+		/* convalidated */
+		value = PQgetvalue(result, rowNumber, 8);
+		fk.convalidated = (*value == 't');
 
 		if (!catalog_add_s_fk_constraint(context->catalog, &fk))
 		{

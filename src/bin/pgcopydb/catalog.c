@@ -148,7 +148,8 @@ static char *sourceDBcreateDDLs[] = {
 	"create table s_fk_constraint("
 	"  oid integer primary key, conname text, "
 	"  nspname text, relname text, qname text, "
-	"  condeferrable bool, condeferred bool, constraintdef text "
+	"  condeferrable bool, condeferred bool, convalidated bool, "
+	"  constraintdef text "
 	")",
 
 	"create table s_seq("
@@ -4851,8 +4852,8 @@ catalog_add_s_fk_constraint(DatabaseCatalog *catalog, SourceFKConstraint *fk)
 	char *sql =
 		"insert into s_fk_constraint("
 		"  oid, conname, nspname, relname, qname, "
-		"  condeferrable, condeferred, constraintdef) "
-		"values($1, $2, $3, $4, $5, $6, $7, $8)";
+		"  condeferrable, condeferred, convalidated, constraintdef) "
+		"values($1, $2, $3, $4, $5, $6, $7, $8, $9)";
 
 	SQLiteQuery query = { 0 };
 
@@ -4874,6 +4875,8 @@ catalog_add_s_fk_constraint(DatabaseCatalog *catalog, SourceFKConstraint *fk)
 		  fk->condeferrable ? 1 : 0, NULL },
 		{ BIND_PARAMETER_TYPE_INT, "condeferred",
 		  fk->condeferred ? 1 : 0, NULL },
+		{ BIND_PARAMETER_TYPE_INT, "convalidated",
+		  fk->convalidated ? 1 : 0, NULL },
 
 		{ BIND_PARAMETER_TYPE_TEXT, "constraintdef", 0, fk->constraintDef }
 	};
@@ -4929,10 +4932,11 @@ catalog_s_fk_constraint_fetch(SQLiteQuery *query)
 
 	fk->condeferrable = sqlite3_column_int(query->ppStmt, 5) == 1;
 	fk->condeferred = sqlite3_column_int(query->ppStmt, 6) == 1;
+	fk->convalidated = sqlite3_column_int(query->ppStmt, 7) == 1;
 
-	if (sqlite3_column_type(query->ppStmt, 7) != SQLITE_NULL)
+	if (sqlite3_column_type(query->ppStmt, 8) != SQLITE_NULL)
 	{
-		int len = sqlite3_column_bytes(query->ppStmt, 7);
+		int len = sqlite3_column_bytes(query->ppStmt, 8);
 		int bytes = len + 1;
 
 		fk->constraintDef = (char *) calloc(bytes, sizeof(char));
@@ -4944,7 +4948,7 @@ catalog_s_fk_constraint_fetch(SQLiteQuery *query)
 		}
 
 		strlcpy(fk->constraintDef,
-				(char *) sqlite3_column_text(query->ppStmt, 7),
+				(char *) sqlite3_column_text(query->ppStmt, 8),
 				bytes);
 	}
 
@@ -5053,7 +5057,7 @@ catalog_iter_s_fk_constraint_init(SourceFKConstraintIterator *iter)
 
 	char *sql =
 		"  select oid, conname, nspname, relname, qname, "
-		"         condeferrable, condeferred, constraintdef "
+		"         condeferrable, condeferred, convalidated, constraintdef "
 		"    from s_fk_constraint "
 		"order by nspname, relname, conname";
 
