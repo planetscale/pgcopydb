@@ -50,6 +50,7 @@ typedef struct TestDecodingColumns
 	uint32_t oid;
 	char *colnameStart;
 	int colnameLen;
+	char *typname;
 	char *valueStart;
 	int valueLen;
 	bool isQuoted;
@@ -834,6 +835,14 @@ parseNextColumn(TestDecodingColumns *cols,
 
 	sformat(typname, sizeof(typname), "%.*s", typLen, typStart);
 
+	cols->typname = strdup(typname);
+
+	if (cols->typname == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
 	/*
 	 * Treat text, json, and jsonb types the same way for quote un-escaping.
 	 * test_decoding outputs all of these with doubled single-quotes that need
@@ -1020,6 +1029,7 @@ listToTuple(LogicalMessageTuple *tuple, TestDecodingColumns *cols, int count)
 		LogicalMessageAttribute *attr = &(tuple->attributes.array[i]);
 
 		attr->attname = strndup(cur->colnameStart, cur->colnameLen);
+		attr->typname = cur->typname;
 		valueColumn->oid = TEXTOID;
 
 		if (cur->valueStart == NULL)

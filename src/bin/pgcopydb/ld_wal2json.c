@@ -364,6 +364,19 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 			return false;
 		}
 
+		const char *typname = json_object_get_string(jscol, "type");
+
+		if (typname != NULL)
+		{
+			attr->typname = strdup(typname);
+
+			if (attr->typname == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+		}
+
 		JSON_Value *jsval = json_object_get_value(jscol, "value");
 
 		switch (json_value_get_type(jsval))
@@ -399,9 +412,8 @@ SetColumnNamesAndValues(LogicalMessageTuple *tuple,
 			case JSONString:
 			{
 				const char *x = json_value_get_string(jsval);
-				const char *t = json_object_get_string(jscol, "type");
 
-				if (json_object_has_value(jscol, "type") && streq(t, "bytea"))
+				if (attr->typname != NULL && streq(attr->typname, "bytea"))
 				{
 					/*
 					 * wal2json has the following processing of bytea values:

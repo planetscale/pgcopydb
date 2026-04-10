@@ -105,3 +105,30 @@ begin;
 update single_column_table set id = id;
 update multi_column_table set id = id, name = name, email = email;
 commit;
+
+--
+-- Test json columns with REPLICA IDENTITY FULL.
+-- json has no equality operator, so WHERE clauses need ::text casts.
+--
+-- json stores the exact input text (whitespace, key order, duplicates),
+-- so json::text is deterministic — it returns the verbatim stored string.
+-- These test cases exercise multi-key objects, varied whitespace, nested
+-- structures, and duplicate keys to prove the ::text comparison is stable.
+--
+begin;
+insert into json_column_table(id, data) values
+(1, '{"b": 2, "a": 1}'),
+(2, '{"key":    "spaces",  "num": 42}'),
+(3, '{"nested": {"inner": [1,2,3]}, "top": true}'),
+(4, '{"dup": "first", "dup": "second"}');
+commit;
+
+begin;
+update json_column_table set data = '{"b": 2, "a": "updated"}' where id = 1;
+update json_column_table set data = '{"key": "no-spaces", "num": 42}' where id = 2;
+commit;
+
+begin;
+delete from json_column_table where id = 3;
+delete from json_column_table where id = 4;
+commit;
