@@ -51,3 +51,12 @@ create table if not exists multi_column_table
 );
 alter table multi_column_table replica identity full;
 commit;
+
+begin;
+create table if not exists json_column_table
+(
+   id bigint,
+   data json
+);
+alter table json_column_table replica identity full;
+commit;
