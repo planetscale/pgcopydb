@@ -2272,6 +2272,37 @@ stream_write_insert(FILE *out, LogicalMessageInsert *insert)
 
 
 /*
+ * appendWhereClauseColumn appends a single column comparison to a WHERE
+ * clause buffer. For column types that lack an equality operator (e.g., json),
+ * the comparison is cast to text on both sides.
+ */
+static void
+appendWhereClauseColumn(PQExpBuffer buf, LogicalMessageAttribute *attr,
+						bool first, int *pos)
+{
+	/*
+	 * json has no equality operator, so we cast both sides to text for
+	 * comparison. This is safe because wal2json emits the exact stored
+	 * text representation of the json value.
+	 */
+	if (attr->typname != NULL && streq(attr->typname, "json"))
+	{
+		appendPQExpBuffer(buf, "%s%s::text = $%d::text",
+						  first ? "" : " and ",
+						  attr->attname,
+						  ++(*pos));
+	}
+	else
+	{
+		appendPQExpBuffer(buf, "%s%s = $%d",
+						  first ? "" : " and ",
+						  attr->attname,
+						  ++(*pos));
+	}
+}
+
+
+/*
  * stream_write_update writes an UPDATE statement to the already open out
  * stream.
  */
@@ -2408,6 +2439,8 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 
 		appendPQExpBufferStr(buf, " WHERE ");
 
+		bool firstWhereCol = true;
+
 		for (int r = 0; r < old->values.count; r++)
 		{
 			LogicalMessageValues *values = &(old->values.array[r]);
@@ -2435,15 +2468,12 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 					 * in the WHERE clause.
 					 */
 					appendPQExpBuffer(buf, "%s%s IS NULL",
-									  v > 0 ? " and " : "",
+									  firstWhereCol ? "" : " and ",
 									  attr->attname);
 				}
 				else
 				{
-					appendPQExpBuffer(buf, "%s%s = $%d",
-									  v > 0 ? " and " : "",
-									  attr->attname,
-									  ++pos);
+					appendWhereClauseColumn(buf, attr, firstWhereCol, &pos);
 
 					if (!stream_add_value_in_json_array(value, jsArray))
 					{
@@ -2452,6 +2482,8 @@ stream_write_update(FILE *out, LogicalMessageUpdate *update)
 						return false;
 					}
 				}
+
+				firstWhereCol = false;
 			}
 		}
 
@@ -2532,6 +2564,8 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 
 		int pos = 0;
 
+		bool firstWhereCol = true;
+
 		for (int r = 0; r < old->values.count; r++)
 		{
 			LogicalMessageValues *values = &(old->values.array[r]);
@@ -2559,15 +2593,12 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 					 * in the WHERE clause.
 					 */
 					appendPQExpBuffer(buf, "%s%s IS NULL",
-									  v > 0 ? " and " : "",
+									  firstWhereCol ? "" : " and ",
 									  attr->attname);
 				}
 				else
 				{
-					appendPQExpBuffer(buf, "%s%s = $%d",
-									  v > 0 ? " and " : "",
-									  attr->attname,
-									  ++pos);
+					appendWhereClauseColumn(buf, attr, firstWhereCol, &pos);
 
 					if (!stream_add_value_in_json_array(value, jsArray))
 					{
@@ -2576,6 +2607,8 @@ stream_write_delete(FILE *out, LogicalMessageDelete *delete)
 						return false;
 					}
 				}
+
+				firstWhereCol = false;
 			}
 		}
 
