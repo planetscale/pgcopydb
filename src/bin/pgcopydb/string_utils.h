@@ -38,6 +38,8 @@ bool hexStringToUInt32(const char *str, uint32_t *number);
 
 bool IntervalToString(uint64_t millisecs, char *buffer, size_t size);
 
+bool cli_parse_duration(const char *str, int *seconds);
+
 typedef struct LinesBuffer
 {
 	char *buffer;

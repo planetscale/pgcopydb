@@ -363,6 +363,91 @@ IntervalToString(uint64_t millisecs, char *buffer, size_t size)
 
 
 /*
+ * cli_parse_duration parses a duration string like "30s", "15m", "2h" into
+ * seconds. A bare number (no suffix) is treated as seconds. Returns false on
+ * parse error.
+ */
+bool
+cli_parse_duration(const char *str, int *seconds)
+{
+	if (str == NULL || str[0] == '\0')
+	{
+		return false;
+	}
+
+	char *end = NULL;
+
+	errno = 0;
+
+	long value = strtol(str, &end, 10);
+
+	if (end == str || value < 0)
+	{
+		return false;
+	}
+	else if (errno != 0)
+	{
+		return false;
+	}
+
+	if (*end == '\0')
+	{
+		/* bare number, treat as seconds */
+		if (value > INT_MAX)
+		{
+			return false;
+		}
+		*seconds = (int) value;
+		return true;
+	}
+
+	if (*(end + 1) != '\0')
+	{
+		/* trailing characters after suffix */
+		return false;
+	}
+
+	switch (*end)
+	{
+		case 's':
+		{
+			if (value > INT_MAX)
+			{
+				return false;
+			}
+			*seconds = (int) value;
+			return true;
+		}
+
+		case 'm':
+		{
+			if (value > INT_MAX / 60)
+			{
+				return false;
+			}
+			*seconds = (int) (value * 60);
+			return true;
+		}
+
+		case 'h':
+		{
+			if (value > INT_MAX / 3600)
+			{
+				return false;
+			}
+			*seconds = (int) (value * 3600);
+			return true;
+		}
+
+		default:
+		{
+			return false;
+		}
+	}
+}
+
+
+/*
  * countLines returns how many line separators (\n) are found in the given
  * string.
  */
