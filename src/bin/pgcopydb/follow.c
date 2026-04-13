@@ -608,6 +608,23 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	}
 
 	/*
+	 * When cleanup threshold is configured, start the cleanup watchdog
+	 * to periodically remove old applied CDC files.
+	 */
+	if (streamSpecs->cleanupThresholdBytes > 0)
+	{
+		FollowSubProcess *cleanup = &(streamSpecs->cleanup);
+
+		if (!follow_start_subprocess(streamSpecs, cleanup))
+		{
+			log_error("Failed to start the %s process", cleanup->name);
+
+			(void) follow_exit_early(streamSpecs);
+			return false;
+		}
+	}
+
+	/*
 	 * Close pipe ends which follow is not using. Otherwise the processes
 	 * like transform and apply which reads from the pipe during replay
 	 * will never see EOF.
@@ -957,7 +974,8 @@ follow_wait_subprocesses(StreamSpecs *specs)
 	FollowSubProcess *processArray[] = {
 		&(specs->prefetch),
 		&(specs->transform),
-		&(specs->catchup)
+		&(specs->catchup),
+		&(specs->cleanup)
 	};
 
 	int count = sizeof(processArray) / sizeof(processArray[0]);
@@ -1147,7 +1165,8 @@ follow_terminate_subprocesses(StreamSpecs *specs)
 	FollowSubProcess *processArray[] = {
 		&(specs->prefetch),
 		&(specs->transform),
-		&(specs->catchup)
+		&(specs->catchup),
+		&(specs->cleanup)
 	};
 	int count = sizeof(processArray) / sizeof(processArray[0]);
 
