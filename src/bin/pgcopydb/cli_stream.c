@@ -222,6 +222,8 @@ cli_stream_getopts(int argc, char **argv)
 		{ "debug", no_argument, NULL, 'd' },
 		{ "trace", no_argument, NULL, 'z' },
 		{ "quiet", no_argument, NULL, 'q' },
+		{ "cleanup-threshold", required_argument, NULL, 256 },
+		{ "cleanup-min-age", required_argument, NULL, 257 },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
 	};
@@ -431,6 +433,45 @@ cli_stream_getopts(int argc, char **argv)
 			{
 				commandline_help(stderr);
 				exit(EXIT_CODE_QUIT);
+				break;
+			}
+
+			case 256:
+			{
+				if (!cli_parse_bytes_pretty(
+						optarg,
+						&(options.cleanupThresholdBytes),
+						(char *) &(options.cleanupThresholdPretty),
+						sizeof(options.cleanupThresholdPretty)))
+				{
+					log_fatal("Failed to parse --cleanup-threshold: \"%s\"",
+							  optarg);
+					++errors;
+				}
+
+				log_trace("--cleanup-threshold %s (%lld)",
+						  options.cleanupThresholdPretty,
+						  (long long) options.cleanupThresholdBytes);
+				break;
+			}
+
+			case 257:
+			{
+				if (!cli_parse_duration(
+						optarg,
+						&(options.cleanupMinAgeSeconds)))
+				{
+					log_fatal("Failed to parse --cleanup-min-age: \"%s\"",
+							  optarg);
+					++errors;
+				}
+
+				strlcpy(options.cleanupMinAgePretty, optarg,
+						sizeof(options.cleanupMinAgePretty));
+
+				log_trace("--cleanup-min-age %s (%d seconds)",
+						  options.cleanupMinAgePretty,
+						  options.cleanupMinAgeSeconds);
 				break;
 			}
 

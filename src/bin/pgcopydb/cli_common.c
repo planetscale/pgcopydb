@@ -654,6 +654,8 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "restore-tolerance", required_argument, NULL, 256 },
 		{ "defer-indexes", no_argument, NULL, 257 },
 		{ "defer-analyze", no_argument, NULL, 258 },
+		{ "cleanup-threshold", required_argument, NULL, 259 },
+		{ "cleanup-min-age", required_argument, NULL, 260 },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
 	};
@@ -1146,6 +1148,45 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.deferAnalyze = true;
 				log_trace("--defer-analyze");
+				break;
+			}
+
+			case 259:
+			{
+				if (!cli_parse_bytes_pretty(
+						optarg,
+						&(options.cleanupThresholdBytes),
+						(char *) &(options.cleanupThresholdPretty),
+						sizeof(options.cleanupThresholdPretty)))
+				{
+					log_fatal("Failed to parse --cleanup-threshold: \"%s\"",
+							  optarg);
+					++errors;
+				}
+
+				log_trace("--cleanup-threshold %s (%lld)",
+						  options.cleanupThresholdPretty,
+						  (long long) options.cleanupThresholdBytes);
+				break;
+			}
+
+			case 260:
+			{
+				if (!cli_parse_duration(
+						optarg,
+						&(options.cleanupMinAgeSeconds)))
+				{
+					log_fatal("Failed to parse --cleanup-min-age: \"%s\"",
+							  optarg);
+					++errors;
+				}
+
+				strlcpy(options.cleanupMinAgePretty, optarg,
+						sizeof(options.cleanupMinAgePretty));
+
+				log_trace("--cleanup-min-age %s (%d seconds)",
+						  options.cleanupMinAgePretty,
+						  options.cleanupMinAgeSeconds);
 				break;
 			}
 
