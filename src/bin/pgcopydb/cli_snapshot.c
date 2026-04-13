@@ -326,7 +326,9 @@ cli_create_snapshot(int argc, char **argv)
 							   &(copySpecs.filters),
 							   createSNoptions.stdIn,
 							   createSNoptions.stdOut,
-							   logSQL))
+							   logSQL,
+							   0,
+							   0))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);

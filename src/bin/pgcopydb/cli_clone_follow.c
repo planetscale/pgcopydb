@@ -228,7 +228,9 @@ clone_and_follow(CopyDataSpec *copySpecs)
 						   &(copySpecs->filters),
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut,
-						   logSQL))
+						   logSQL,
+						   copyDBoptions.cleanupThresholdBytes,
+						   copyDBoptions.cleanupMinAgeSeconds))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -564,7 +566,9 @@ cli_follow(int argc, char **argv)
 						   &(copySpecs.filters),
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut,
-						   logSQL))
+						   logSQL,
+						   copyDBoptions.cleanupThresholdBytes,
+						   copyDBoptions.cleanupMinAgeSeconds))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

@@ -831,6 +831,17 @@ follow_start_catchup(StreamSpecs *specs)
 
 
 /*
+ * follow_start_cleanup starts a sub-process that cleans up old CDC files.
+ * This is a temporary stub that will be replaced with real implementation.
+ */
+bool
+follow_start_cleanup(StreamSpecs *specs)
+{
+	return true;
+}
+
+
+/*
  * follow_start_subprocess forks a subprocess and calls the given function.
  */
 bool
