@@ -12,6 +12,7 @@
 
 #include "cli_common.h"
 #include "cli_root.h"
+#include "ld_cleanup.h"
 #include "ld_stream.h"
 #include "log.h"
 #include "progress.h"
@@ -849,12 +850,13 @@ follow_start_catchup(StreamSpecs *specs)
 
 /*
  * follow_start_cleanup starts a sub-process that cleans up old CDC files.
- * This is a temporary stub that will be replaced with real implementation.
+ * The catalog is already opened by follow_start_subprocess before this is
+ * called.
  */
 bool
 follow_start_cleanup(StreamSpecs *specs)
 {
-	return true;
+	return cdc_cleanup_loop(specs);
 }
 
 
