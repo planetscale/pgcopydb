@@ -1241,6 +1241,23 @@ cli_copy_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
+	if (options.cleanupThresholdBytes == 0 && options.cleanupMinAgeSeconds > 0)
+	{
+		log_warn("--cleanup-min-age has no effect without --cleanup-threshold");
+	}
+
+	/*
+	 * When cleanup threshold is set but min-age wasn't explicitly provided,
+	 * default to 15 minutes (900 seconds) for safety.
+	 */
+	if (options.cleanupThresholdBytes > 0 && options.cleanupMinAgeSeconds == 0
+		&& options.cleanupMinAgePretty[0] == '\0')
+	{
+		options.cleanupMinAgeSeconds = 900;
+		strlcpy(options.cleanupMinAgePretty, "15m",
+				sizeof(options.cleanupMinAgePretty));
+	}
+
 	if (errors > 0)
 	{
 		commandline_help(stderr);

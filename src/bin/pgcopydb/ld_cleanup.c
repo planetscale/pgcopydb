@@ -29,7 +29,7 @@
 
 
 #define CDC_CLEANUP_CYCLE_SECONDS 30
-#define CDC_CLEANUP_MAX_FILES 4096
+#define CDC_CLEANUP_MAX_FILES 16384
 
 
 typedef struct CDCFileEntry
@@ -214,7 +214,7 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 			/* strip the suffix to get the bare WAL name */
 			char barename[MAXPGPATH];
 			strlcpy(barename, name, MAXPGPATH);
-			char *dot = strchr(barename, '.');
+			char *dot = strrchr(barename, '.');
 			if (dot != NULL)
 				*dot = '\0';
 
@@ -250,10 +250,9 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 				continue;
 			}
 
-			totalAppliedBytes += st.st_size;
-
 			if (entryCount < CDC_CLEANUP_MAX_FILES)
 			{
+				totalAppliedBytes += st.st_size;
 				CDCFileEntry *entry = &entries[entryCount++];
 
 				strlcpy(entry->path, fullpath, MAXPGPATH);
