@@ -216,7 +216,9 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 			strlcpy(barename, name, MAXPGPATH);
 			char *dot = strrchr(barename, '.');
 			if (dot != NULL)
+			{
 				*dot = '\0';
+			}
 
 			if (!IsXLogFileName(barename))
 			{
@@ -285,7 +287,7 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 		}
 
 		/* sort oldest-first so we delete the oldest files first */
-		qsort(entries, entryCount, sizeof(CDCFileEntry),
+		qsort(entries, entryCount, sizeof(CDCFileEntry), /* IGNORE-BANNED */
 			  compare_cdc_file_entry_by_mtime);
 
 		time_t now = time(NULL);
@@ -319,9 +321,9 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 			deletedCount++;
 
 			log_debug("CDC cleanup: deleted %s (%lld bytes, age %.0fs)",
-					 entry->path,
-					 (long long) entry->size,
-					 difftime(now, entry->mtime));
+					  entry->path,
+					  (long long) entry->size,
+					  difftime(now, entry->mtime));
 
 			/* mark as deleted so second pass skips it */
 			entry->path[0] = '\0';

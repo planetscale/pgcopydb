@@ -522,8 +522,8 @@ cli_stream_getopts(int argc, char **argv)
 	 * When cleanup threshold is set but min-age wasn't explicitly provided,
 	 * default to 15 minutes (900 seconds) for safety.
 	 */
-	if (options.cleanupThresholdBytes > 0 && options.cleanupMinAgeSeconds == 0
-		&& options.cleanupMinAgePretty[0] == '\0')
+	if (options.cleanupThresholdBytes > 0 && options.cleanupMinAgeSeconds == 0 &&
+		options.cleanupMinAgePretty[0] == '\0')
 	{
 		options.cleanupMinAgeSeconds = 900;
 		strlcpy(options.cleanupMinAgePretty, "15m",
