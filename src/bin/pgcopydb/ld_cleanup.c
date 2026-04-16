@@ -58,26 +58,39 @@ cdc_file_is_eligible(uint64_t fileLSN,
 
 
 /*
- * compare_cdc_file_entry_by_mtime is a qsort comparator that sorts CDCFileEntry
- * entries oldest-first by mtime.
+ * find_oldest_entry scans entries[0..count) for the entry with the smallest
+ * mtime whose path has not been cleared (i.e. not yet deleted).  When
+ * eligibleOnly is true, only entries that pass cdc_file_is_eligible are
+ * considered.  Returns the index of the oldest match, or -1 if none.
  */
 static int
-compare_cdc_file_entry_by_mtime(const void *a, const void *b)
+find_oldest_entry(CDCFileEntry *entries, int count,
+				  bool eligibleOnly, uint64_t replayLSN,
+				  time_t now, int minAgeSeconds)
 {
-	const CDCFileEntry *ea = (const CDCFileEntry *) a;
-	const CDCFileEntry *eb = (const CDCFileEntry *) b;
+	int oldest = -1;
 
-	if (ea->mtime < eb->mtime)
+	for (int i = 0; i < count; i++)
 	{
-		return -1;
+		if (entries[i].path[0] == '\0')
+		{
+			continue;
+		}
+
+		if (eligibleOnly &&
+			!cdc_file_is_eligible(entries[i].lsn, replayLSN,
+								  entries[i].mtime, now, minAgeSeconds))
+		{
+			continue;
+		}
+
+		if (oldest == -1 || entries[i].mtime < entries[oldest].mtime)
+		{
+			oldest = i;
+		}
 	}
 
-	if (ea->mtime > eb->mtime)
-	{
-		return 1;
-	}
-
-	return 0;
+	return oldest;
 }
 
 
@@ -286,34 +299,37 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 			continue;
 		}
 
-		/* sort oldest-first so we delete the oldest files first */
-		qsort(entries, entryCount, sizeof(CDCFileEntry), /* IGNORE-BANNED */
-			  compare_cdc_file_entry_by_mtime);
-
 		time_t now = time(NULL);
 		uint64_t bytesToFree = totalAppliedBytes - thresholdBytes;
 		uint64_t freedBytes = 0;
 		int deletedCount = 0;
 
 		/*
-		 * First pass: delete files that are old enough (>= minAgeSeconds).
+		 * First pass: repeatedly find and delete the oldest eligible
+		 * file (age >= minAgeSeconds) until we are under threshold.
 		 */
-		for (int i = 0; i < entryCount && freedBytes < bytesToFree; i++)
+		for (;;)
 		{
-			CDCFileEntry *entry = &entries[i];
-
-			if (!cdc_file_is_eligible(entry->lsn, replayLSN,
-									  entry->mtime, now, minAgeSeconds))
+			if (freedBytes >= bytesToFree)
 			{
-				log_debug("CDC cleanup: skipping %s (too young, age %.0fs)",
-						  entry->path,
-						  difftime(now, entry->mtime));
-				continue;
+				break;
 			}
+
+			int idx = find_oldest_entry(entries, entryCount,
+										true, replayLSN,
+										now, minAgeSeconds);
+
+			if (idx == -1)
+			{
+				break;
+			}
+
+			CDCFileEntry *entry = &entries[idx];
 
 			if (unlink(entry->path) != 0)
 			{
 				log_warn("CDC cleanup: failed to delete %s: %m", entry->path);
+				entry->path[0] = '\0';
 				continue;
 			}
 
@@ -325,41 +341,48 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 					  (long long) entry->size,
 					  difftime(now, entry->mtime));
 
-			/* mark as deleted so second pass skips it */
 			entry->path[0] = '\0';
 		}
 
 		/*
 		 * Second pass: if old-enough files alone couldn't bring us under
-		 * threshold, override the age floor (disk pressure).
+		 * threshold, override the age floor (disk pressure) and delete
+		 * the oldest remaining files regardless of age.
 		 */
-		if (freedBytes < bytesToFree)
+		for (;;)
 		{
-			for (int i = 0; i < entryCount && freedBytes < bytesToFree; i++)
+			if (freedBytes >= bytesToFree)
 			{
-				CDCFileEntry *entry = &entries[i];
-
-				/* skip already-deleted entries */
-				if (entry->path[0] == '\0')
-				{
-					continue;
-				}
-
-				log_notice("CDC cleanup: disk pressure override, "
-						   "deleting young file %s (age %.0fs)",
-						   entry->path,
-						   difftime(now, entry->mtime));
-
-				if (unlink(entry->path) != 0)
-				{
-					log_warn("CDC cleanup: failed to delete %s: %m",
-							 entry->path);
-					continue;
-				}
-
-				freedBytes += entry->size;
-				deletedCount++;
+				break;
 			}
+
+			int idx = find_oldest_entry(entries, entryCount,
+										false, replayLSN,
+										now, minAgeSeconds);
+
+			if (idx == -1)
+			{
+				break;
+			}
+
+			CDCFileEntry *entry = &entries[idx];
+
+			log_notice("CDC cleanup: disk pressure override, "
+					   "deleting young file %s (age %.0fs)",
+					   entry->path,
+					   difftime(now, entry->mtime));
+
+			if (unlink(entry->path) != 0)
+			{
+				log_warn("CDC cleanup: failed to delete %s: %m",
+						 entry->path);
+				entry->path[0] = '\0';
+				continue;
+			}
+
+			freedBytes += entry->size;
+			deletedCount++;
+			entry->path[0] = '\0';
 		}
 
 		if (deletedCount > 0)
