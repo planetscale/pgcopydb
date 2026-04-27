@@ -1483,6 +1483,7 @@ copydb_create_fk_constraints(CopyDataSpec *specs)
 	bool success = true;
 	int notValidCount = 0;
 	int sourceNotValidCount = 0;
+	int deferredCount = 0;
 
 	for (int i = 0; i < fkArray.count; i++)
 	{
@@ -1509,14 +1510,20 @@ copydb_create_fk_constraints(CopyDataSpec *specs)
 		}
 
 		/*
-		 * If the constraint is already NOT VALID on the source, create it
-		 * as NOT VALID directly — no need to try normal creation first.
-		 * pg_get_constraintdef() already includes NOT VALID in the output
-		 * for such constraints, so the constraintDef handles this, but we
-		 * log it explicitly for clarity.
+		 * If --defer-validate-fks is set, create every FK as NOT VALID up
+		 * front. The validating seqscan is skipped; pg_constraint.convalidated
+		 * stays false on the target until VALIDATE CONSTRAINT runs later.
 		 */
-		if (!fk->convalidated)
+		if (specs->deferValidateFKs && fk->convalidated)
 		{
+			deferredCount++;
+		}
+		else if (!fk->convalidated)
+		{
+			/*
+			 * pg_get_constraintdef() already includes NOT VALID in the output
+			 * for source-NOT-VALID constraints; logging here for clarity.
+			 */
 			log_notice("FK constraint \"%s\" on %s is NOT VALID on source, "
 					   "creating as NOT VALID on target",
 					   fk->conname, fk->tableQname);
@@ -1544,6 +1551,16 @@ copydb_create_fk_constraints(CopyDataSpec *specs)
 			}
 		}
 
+		/*
+		 * Source-NOT-VALID constraints already carry NOT VALID inside
+		 * constraintDef (from pg_get_constraintdef), so we only append it
+		 * here when the source was validated and we're deferring.
+		 */
+		if (specs->deferValidateFKs && fk->convalidated)
+		{
+			appendPQExpBufferStr(cmd, " NOT VALID");
+		}
+
 		if (PQExpBufferBroken(cmd))
 		{
 			log_error("Failed to create query for FK constraint \"%s\": "
@@ -1567,7 +1584,7 @@ copydb_create_fk_constraints(CopyDataSpec *specs)
 
 		log_notice("Creating FK constraint: %s", cmd->data);
 
-		bool notValid = false;
+		bool notValid = specs->deferValidateFKs && fk->convalidated;
 
 		if (!pgsql_execute(&dst, cmd->data))
 		{
@@ -1694,6 +1711,14 @@ copydb_create_fk_constraints(CopyDataSpec *specs)
 		log_notice("%d FK constraint(s) were already NOT VALID on the "
 				   "source database and created as NOT VALID on target",
 				   sourceNotValidCount);
+	}
+
+	if (deferredCount > 0)
+	{
+		log_info("%d FK constraint(s) created as NOT VALID per "
+				 "--defer-validate-fks; run VALIDATE CONSTRAINT separately "
+				 "to validate them",
+				 deferredCount);
 	}
 
 	if (notValidCount > 0)
