@@ -156,6 +156,7 @@ jobs:
           - blob-snapshot-release
           - follow-defer-indexes
           - fk-not-valid
+          - defer-validate-fks
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
