@@ -1483,7 +1483,7 @@ copydb_create_fk_constraints(CopyDataSpec *specs)
 	bool success = true;
 	int notValidCount = 0;
 	int sourceNotValidCount = 0;
-	int deferredCount = 0;
+	int deferredNotValidCount = 0;
 
 	for (int i = 0; i < fkArray.count; i++)
 	{
@@ -1510,24 +1510,30 @@ copydb_create_fk_constraints(CopyDataSpec *specs)
 		}
 
 		/*
-		 * If --defer-validate-fks is set, create every FK as NOT VALID up
-		 * front. The validating seqscan is skipped; pg_constraint.convalidated
-		 * stays false on the target until VALIDATE CONSTRAINT runs later.
+		 * If the constraint is already NOT VALID on the source, create it
+		 * as NOT VALID directly — no need to try normal creation first.
+		 * pg_get_constraintdef() already includes NOT VALID in the output
+		 * for such constraints, so the constraintDef handles this, but we
+		 * log it explicitly for clarity.
 		 */
-		if (specs->deferValidateFKs && fk->convalidated)
+		bool notValid = false;
+		if (!fk->convalidated)
 		{
-			deferredCount++;
-		}
-		else if (!fk->convalidated)
-		{
-			/*
-			 * pg_get_constraintdef() already includes NOT VALID in the output
-			 * for source-NOT-VALID constraints; logging here for clarity.
-			 */
 			log_notice("FK constraint \"%s\" on %s is NOT VALID on source, "
 					   "creating as NOT VALID on target",
 					   fk->conname, fk->tableQname);
+			notValid = true;
 			sourceNotValidCount++;
+		}
+
+		if (specs->deferValidateFKs)
+		{
+			log_notice("Defer validate is set for FKs, "
+					   "creating FK constraint \"%s\" on %s "
+					   "as NOT VALID on target",
+					   fk->conname, fk->tableQname);
+			notValid = true;
+			deferredNotValidCount++;
 		}
 
 		/*
@@ -1584,16 +1590,15 @@ copydb_create_fk_constraints(CopyDataSpec *specs)
 
 		log_notice("Creating FK constraint: %s", cmd->data);
 
-		bool notValid = specs->deferValidateFKs && fk->convalidated;
-
 		if (!pgsql_execute(&dst, cmd->data))
 		{
 			/*
 			 * Check if the failure is due to a foreign key violation
-			 * (SQLSTATE 23503). If so, retry with NOT VALID.
+			 * (SQLSTATE 23503). If so, retry with NOT VALID only if
+			 * the original attempt didn't already include NOT VALID.
 			 */
 			if (strcmp(dst.sqlstate,
-					   STR_ERRCODE_FOREIGN_KEY_VIOLATION) == 0)
+					   STR_ERRCODE_FOREIGN_KEY_VIOLATION) == 0 && !notValid)
 			{
 				log_warn("FK constraint \"%s\" on %s has pre-existing data "
 						 "violations, retrying with NOT VALID",
@@ -1713,19 +1718,18 @@ copydb_create_fk_constraints(CopyDataSpec *specs)
 				   sourceNotValidCount);
 	}
 
-	if (deferredCount > 0)
-	{
-		log_info("%d FK constraint(s) created as NOT VALID per "
-				 "--defer-validate-fks; run VALIDATE CONSTRAINT separately "
-				 "to validate them",
-				 deferredCount);
-	}
-
 	if (notValidCount > 0)
 	{
 		log_warn("%d FK constraint(s) created as NOT VALID due to "
 				 "pre-existing data violations on the source database",
 				 notValidCount);
+	}
+
+	if (deferredNotValidCount > 0)
+	{
+		log_warn("%d FK constraint(s) created as NOT VALID due to "
+				 "defer-validate flag being used",
+				 deferredNotValidCount);
 	}
 
 	/* cleanup */
