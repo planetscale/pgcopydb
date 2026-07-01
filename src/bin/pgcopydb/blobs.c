@@ -21,6 +21,7 @@ typedef struct BlobMetadataArray
 {
 	int count;
 	Oid oids[MAX_BLOB_PER_FETCH];
+	char rolnames[MAX_BLOB_PER_FETCH][PG_NAMEDATALEN];
 } BlobMetadataArray;
 
 typedef struct BlobMetadataArrayContext
@@ -441,12 +442,14 @@ copydb_blob_worker(CopyDataSpec *specs)
 
 				if (!pg_copy_large_object(src, &dst,
 										  dropIfExists,
-										  mesg.data.oid,
+										  !specs->restoreOptions.noOwner,
+										  mesg.data.lo.oid,
+										  mesg.data.lo.rolname,
 										  &bytesTransmitted))
 				{
 					log_error("Failed to copy Large Object with oid %u, "
 							  "see above for details",
-							  mesg.data.oid);
+							  mesg.data.lo.oid);
 					return false;
 				}
 
@@ -511,12 +514,12 @@ copydb_blob_worker(CopyDataSpec *specs)
  * given blob.
  */
 bool
-copydb_add_blob(CopyDataSpec *specs, uint32_t oid)
+copydb_add_blob(CopyDataSpec *specs, uint32_t oid, const char *rolname)
 {
-	QMessage mesg = {
-		.type = QMSG_TYPE_BLOBOID,
-		.data.oid = oid
-	};
+	QMessage mesg = { .type = QMSG_TYPE_BLOBOID };
+
+	mesg.data.lo.oid = oid;
+	strlcpy(mesg.data.lo.rolname, rolname, sizeof(mesg.data.lo.rolname));
 
 	log_debug("copydb_add_blob(%d): %u", specs->loQueue.qId, oid);
 
@@ -592,7 +595,8 @@ copydb_queue_largeobject_metadata(CopyDataSpec *specs, uint64_t *count)
 	BlobMetadataArrayContext context = { 0 };
 	char *sql =
 		"DECLARE bloboid CURSOR FOR "
-		"SELECT oid FROM pg_largeobject_metadata ORDER BY 1";
+		"SELECT oid, format('%I', pg_catalog.pg_get_userbyid(lomowner)) "
+		"FROM pg_largeobject_metadata ORDER BY 1";
 
 	if (!pgsql_execute(src, sql))
 	{
@@ -633,7 +637,7 @@ copydb_queue_largeobject_metadata(CopyDataSpec *specs, uint64_t *count)
 		{
 			Oid blobOid = context.array.oids[i];
 
-			if (!copydb_add_blob(specs, blobOid))
+			if (!copydb_add_blob(specs, blobOid, context.array.rolnames[i]))
 			{
 				log_error("Failed to queue Large Object %u, "
 						  "see above for details",
@@ -665,9 +669,9 @@ parseBlobMetadataArray(void *ctx, PGresult *result)
 {
 	BlobMetadataArrayContext *context = (BlobMetadataArrayContext *) ctx;
 
-	if (PQnfields(result) != 1)
+	if (PQnfields(result) != 2)
 	{
-		log_error("Query returned %d columns, expected 1", PQnfields(result));
+		log_error("Query returned %d columns, expected 2", PQnfields(result));
 		context->parsedOk = false;
 		return;
 	}
@@ -685,5 +689,10 @@ parseBlobMetadataArray(void *ctx, PGresult *result)
 			context->parsedOk = false;
 			return;
 		}
+
+		char *rolname = PQgetvalue(result, i, 1);
+
+		strlcpy(context->array.rolnames[i], rolname,
+				sizeof(context->array.rolnames[i]));
 	}
 }
