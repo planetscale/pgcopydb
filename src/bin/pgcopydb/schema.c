@@ -3204,6 +3204,10 @@ static void getFKConstraintArray(void *ctx, PGresult *result);
  * Base SELECT columns and FROM/WHERE clauses shared across all FK constraint
  * filter variants. The filter-specific JOIN clauses are inserted between the
  * FROM block and the WHERE block via the array below.
+ *
+ * The conparentid partition-clone filter is added at runtime by
+ * schema_list_fk_constraints (it matches the literal " WHERE c.contype = 'f' "
+ * below, so keep that text verbatim).
  */
 #define FK_SELECT_COLS \
 	"SELECT c.oid, " \
@@ -3345,7 +3349,8 @@ struct FilteringQueries listSourceFKConstraintsSQL[] = {
 bool
 schema_list_fk_constraints(PGSQL *pgsql,
 						   SourceFilters *filters,
-						   DatabaseCatalog *catalog)
+						   DatabaseCatalog *catalog,
+						   bool deferValidateFKs)
 {
 	SourceFKConstraintContext context = { catalog, false };
 
@@ -3372,8 +3377,98 @@ schema_list_fk_constraints(PGSQL *pgsql,
 		return false;
 	}
 
-	bool ok = pgsql_execute_with_params(pgsql, sql, 0, NULL, NULL,
+	/*
+	 * Drop Postgres's internal per-partition FK clones (conparentid <> 0): the
+	 * top-level constraint re-cascades on the target, so the clones are
+	 * redundant and collide. Gated because conparentid is PG 11+ only, and
+	 * --defer-validate-fks needs the clones (PG < 18 can't create a NOT VALID
+	 * FK on a partitioned parent, so the per-leaf clones are the enforcement).
+	 */
+	char *gatedSql = NULL;
+
+	if (pgsql->pgversion_num == 0)
+	{
+		if (!pgsql_server_version(pgsql))
+		{
+			/* errors have already been logged */
+			if (filters->ctePreamble != NULL)
+			{
+				free(sql);
+			}
+			return false;
+		}
+	}
+
+	if (pgsql->pgversion_num >= 110000 && !deferValidateFKs)
+	{
+		const char *anchor = " WHERE c.contype = 'f' ";
+		const char *clause = "  AND c.conparentid = 0 ";
+		char *pos = strstr(sql, anchor);
+
+		if (pos == NULL)
+		{
+			log_error("BUG: FK constraints query is missing its \"%s\" clause; "
+					  "cannot filter out partition FK clones", anchor);
+			if (filters->ctePreamble != NULL)
+			{
+				free(sql);
+			}
+			return false;
+		}
+
+		PQExpBuffer buf = createPQExpBuffer();
+
+		if (buf == NULL)
+		{
+			log_error("Failed to allocate FK constraints query buffer");
+			if (filters->ctePreamble != NULL)
+			{
+				free(sql);
+			}
+			return false;
+		}
+
+		/* splice after the anchor; append (not printf) as the query has %I */
+		size_t prefixLen = (size_t) (pos - sql) + strlen(anchor);
+
+		appendBinaryPQExpBuffer(buf, sql, prefixLen);
+		appendPQExpBufferStr(buf, clause);
+		appendPQExpBufferStr(buf, sql + prefixLen);
+
+		if (PQExpBufferBroken(buf))
+		{
+			log_error("Failed to build FK constraints query: out of memory");
+			(void) destroyPQExpBuffer(buf);
+			if (filters->ctePreamble != NULL)
+			{
+				free(sql);
+			}
+			return false;
+		}
+
+		gatedSql = strdup(buf->data);
+		(void) destroyPQExpBuffer(buf);
+
+		if (gatedSql == NULL)
+		{
+			log_error("Failed to build FK constraints query: out of memory");
+			if (filters->ctePreamble != NULL)
+			{
+				free(sql);
+			}
+			return false;
+		}
+	}
+
+	bool ok = pgsql_execute_with_params(pgsql,
+										gatedSql != NULL ? gatedSql : sql,
+										0, NULL, NULL,
 										&context, &getFKConstraintArray);
+
+	if (gatedSql != NULL)
+	{
+		free(gatedSql);
+	}
 
 	if (filters->ctePreamble != NULL && sql != NULL)
 	{

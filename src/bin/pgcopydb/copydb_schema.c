@@ -994,7 +994,8 @@ copydb_prepare_index_specs(CopyDataSpec *specs, PGSQL *pgsql)
 	 * schema_list_all_indexes. pgcopydb handles FK constraint creation
 	 * directly instead of delegating to pg_restore.
 	 */
-	if (!schema_list_fk_constraints(pgsql, &(specs->filters), sourceDB))
+	if (!schema_list_fk_constraints(pgsql, &(specs->filters), sourceDB,
+									specs->deferValidateFKs))
 	{
 		/* errors have already been logged */
 		return false;
