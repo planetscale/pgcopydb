@@ -1267,6 +1267,30 @@ copydb_create_constraints(CopyDataSpec *specs, PGSQL *dst, SourceTable *table)
 			break;
 		}
 
+		/*
+		 * Idempotency guard: if this constraint already has a done_time in the
+		 * summary, a previous pass created it, so skip it rather than running
+		 * ALTER TABLE ADD CONSTRAINT again (which fails with "index ... is
+		 * already associated with a constraint"). Look up into a throwaway
+		 * spec so the command just prepared into indexSpecs is preserved.
+		 */
+		CopyIndexSpec doneCheck = { .sourceIndex = index };
+
+		if (!summary_lookup_constraint(sourceDB, &doneCheck))
+		{
+			/* errors have already been logged */
+			success = false;
+			break;
+		}
+
+		if (doneCheck.summary.doneTime > 0)
+		{
+			log_debug("Skipping constraint %s: already created (done at %lld)",
+					  index->constraintName,
+					  (long long) doneCheck.summary.doneTime);
+			continue;
+		}
+
 		if (!summary_add_constraint(sourceDB, &indexSpecs))
 		{
 			/* errors have already been logged */
