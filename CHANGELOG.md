@@ -1,3 +1,27 @@
+### pgcopydb v0.19.1 ###
+
+Patch release on top of v0.19 with fixes for CDC data fidelity, follow-mode
+shutdown, and foreign-key handling on partitioned schemas.
+
+### Fixed
+
+* Partitioned-table foreign keys: pgcopydb no longer lists Postgres's internal
+  per-partition FK clones (`pg_constraint.conparentid <> 0`) when creating
+  constraints directly. Recreating the top-level constraint already cascades to
+  every partition, so the clones only produced a flood of
+  `constraint "..." already exists` errors (and, for FKs referencing a
+  partitioned table, bogus single-partition constraints). The filter is
+  version-gated — `conparentid` exists only on PostgreSQL 11+ — and disabled
+  under `--defer-validate-fks`, which relies on the per-partition constraints on
+  PostgreSQL versions that reject `NOT VALID` on a partitioned parent
+* CDC float8 replay: floating-point values are now formatted with their
+  shortest round-trip representation, fixing precision loss that could break
+  numeric `WHERE`-clause matching during change apply and silently diverge
+  target data from the source
+* Follow mode: the CDC pipeline now shuts down cleanly when it reaches the
+  configured end position, and sequences are reset on the target at follow
+  completion so post-cutover writes receive correct sequence values
+
 ### pgcopydb v0.19 ###
 
 Builds on v0.18 with a focus on foreign-key constraint handling for
