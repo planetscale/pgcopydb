@@ -158,6 +158,7 @@ jobs:
           - follow-defer-indexes
           - fk-not-valid
           - defer-validate-fks
+          - fk-partition-clone
           - follow-defer-validate-fks
           - follow-sequence-reset
     steps:
