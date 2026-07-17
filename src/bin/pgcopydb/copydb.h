@@ -235,6 +235,7 @@ typedef struct CopyDataSpec
 	bool skipXidCheck;
 	bool deferIndexes;
 	bool deferAnalyze;
+	bool deferValidateFKs;
 	bool noRolesPasswords;
 	bool useCopyBinary;
 
@@ -413,6 +414,7 @@ bool copydb_prepare_sequence_specs(CopyDataSpec *specs, PGSQL *pgsql, bool reset
 /* copydb_schema.c */
 bool copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs);
 bool copydb_objectid_is_filtered_out(CopyDataSpec *specs,
+									 uint32_t catalogOid,
 									 uint32_t oid,
 									 char *restoreListName);
 bool copydb_matview_refresh_is_filtered_out(CopyDataSpec *specs,

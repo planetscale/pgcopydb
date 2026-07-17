@@ -260,7 +260,9 @@ cli_copydb_getenv(CopyDBOptions *options)
 		{ PGCOPYDB_DEFER_INDEXES, ENV_TYPE_BOOL,
 		  &(options->deferIndexes) },
 		{ PGCOPYDB_DEFER_ANALYZE, ENV_TYPE_BOOL,
-		  &(options->deferAnalyze) }
+		  &(options->deferAnalyze) },
+		{ PGCOPYDB_DEFER_VALIDATE_FKS, ENV_TYPE_BOOL,
+		  &(options->deferValidateFKs) }
 	};
 
 	int parserCount = sizeof(parsers) / sizeof(parsers[0]);
@@ -654,8 +656,9 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "restore-tolerance", required_argument, NULL, 256 },
 		{ "defer-indexes", no_argument, NULL, 257 },
 		{ "defer-analyze", no_argument, NULL, 258 },
-		{ "cleanup-threshold", required_argument, NULL, 259 },
-		{ "cleanup-min-age", required_argument, NULL, 260 },
+		{ "defer-validate-fks", no_argument, NULL, 259 },
+		{ "cleanup-threshold", required_argument, NULL, 260 },
+		{ "cleanup-min-age", required_argument, NULL, 261 },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
 	};
@@ -1153,6 +1156,13 @@ cli_copy_db_getopts(int argc, char **argv)
 
 			case 259:
 			{
+				options.deferValidateFKs = true;
+				log_trace("--defer-validate-fks");
+				break;
+			}
+
+			case 260:
+			{
 				if (!cli_parse_bytes_pretty(
 						optarg,
 						&(options.cleanupThresholdBytes),
@@ -1170,7 +1180,7 @@ cli_copy_db_getopts(int argc, char **argv)
 				break;
 			}
 
-			case 260:
+			case 261:
 			{
 				if (!cli_parse_duration(
 						optarg,

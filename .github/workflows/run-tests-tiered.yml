@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     container: citus/stylechecker:no-py
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
       name: Checkout code
 
     - name: Set safe directory for git
@@ -40,7 +40,7 @@ jobs:
     name: Check for banned APIs
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
 
     - name: Check for banned APIs
       run: sh ./ci/banned.h.sh
@@ -50,10 +50,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
 
       - name: Build docs
-        uses: ammaraskar/sphinx-action@master
+        uses: ammaraskar/sphinx-action@c61ac11d9ee097caf8983c10c8b5af5861b32b54  # master
         with:
           docs-folder: "docs/"
 
@@ -88,7 +88,7 @@ jobs:
           - unit
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
         with:
           fetch-depth: 0
 
@@ -101,7 +101,7 @@ jobs:
             echo "PGVERSION=${{ matrix.PGVERSION }}" >> $GITHUB_ENV
 
       - name: Build pgcopydb Docker image
-        uses: nick-fields/retry@v3
+        uses: nick-fields/retry@ce71cc2ab81d554ebbe88c79ab5975992d79ba08  # v3
         with:
           timeout_minutes: 10
           max_attempts: 3
@@ -139,7 +139,7 @@ jobs:
           - filtering
           - filtering-standby
           - extensions
-          - timescaledb
+          # - timescaledb  # temporarily disabled: failing due to an upstream timescaledb issue
           - skip-publications
           - skip-vacuum
           - skip-large-objects
@@ -152,13 +152,18 @@ jobs:
           - follow-standby
           - follow-9.6
           - follow-data-only
+          - follow-target-reconnect
           - endpos-in-multi-wal-txn
           - blob-snapshot-release
           - follow-defer-indexes
           - fk-not-valid
+          - defer-validate-fks
+          - fk-partition-clone
+          - follow-defer-validate-fks
+          - follow-sequence-reset
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
         with:
           fetch-depth: 0
 
@@ -171,7 +176,7 @@ jobs:
             echo "PGVERSION=${{ matrix.PGVERSION }}" >> $GITHUB_ENV
 
       - name: Build pgcopydb Docker image
-        uses: nick-fields/retry@v3
+        uses: nick-fields/retry@ce71cc2ab81d554ebbe88c79ab5975992d79ba08  # v3
         with:
           timeout_minutes: 10
           max_attempts: 3

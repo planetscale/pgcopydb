@@ -198,9 +198,35 @@ stream_transform_stream_internal(StreamSpecs *specs)
 
 	if (!read_from_stream(privateContext->in, &context))
 	{
-		log_error("Failed to transform JSON messages from input stream, "
-				  "see above for details");
-		return false;
+		/*
+		 * When the apply process reaches endpos it exits and closes the read
+		 * end of our output pipe. If we were still writing trailing messages
+		 * we get EPIPE (pipelineBroken). That is an expected, clean shutdown
+		 * when endpos has been reached for the last message we processed: the
+		 * downstream is done on purpose, not crashed.
+		 *
+		 * We only treat EPIPE as clean when endpos is set AND the last message
+		 * we handled is at or past it. In every other case (endpos unset, or
+		 * not yet reached) a broken pipe means the downstream died
+		 * unexpectedly and we must report failure. A genuine downstream crash
+		 * is also caught independently by the apply process's own non-zero
+		 * exit at the follow supervisor.
+		 */
+		if (privateContext->pipelineBroken &&
+			privateContext->endpos != InvalidXLogRecPtr &&
+			privateContext->endpos <= privateContext->metadata.lsn)
+		{
+			log_info("Apply process reached endpos %X/%X and closed the pipe; "
+					 "transform stopping cleanly at %X/%X",
+					 LSN_FORMAT_ARGS(privateContext->endpos),
+					 LSN_FORMAT_ARGS(privateContext->metadata.lsn));
+		}
+		else
+		{
+			log_error("Failed to transform JSON messages from input stream, "
+					  "see above for details");
+			return false;
+		}
 	}
 
 	/* we might have stopped reading mid-file, let's close it. */
@@ -503,6 +529,18 @@ stream_transform_write_message(StreamContext *privateContext,
 	{
 		if (!stream_write_message(privateContext->out, currentMsg))
 		{
+			/*
+			 * A broken downstream pipe (EPIPE) is expected when the apply
+			 * process has reached endpos and exited: it closes its read end
+			 * while we might still be writing trailing messages. Record that
+			 * so the caller can decide whether this is a clean endpos
+			 * shutdown or a genuine failure. See stream_transform_stream().
+			 */
+			if (errno == EPIPE)
+			{
+				privateContext->pipelineBroken = true;
+			}
+
 			/* errors have already been logged */
 			return false;
 		}
@@ -2698,7 +2736,25 @@ stream_add_value_in_json_array(LogicalMessageValue *value, JSON_Array *jsArray)
 				}
 				else
 				{
-					sformat(string, sizeof(string), "%f", value->val.float8);
+					/*
+					 * Emit the shortest decimal that round-trips to the same
+					 * double (15 to 17 significant digits). This both preserves
+					 * full precision and keeps clean values exact: "5.99" stays
+					 * "5.99" rather than "5.9900000000000002", which matters
+					 * because under REPLICA IDENTITY FULL the value is also a
+					 * WHERE-clause key and an over-precise literal would not
+					 * match the stored value.
+					 */
+					for (int precision = 15; precision <= 17; precision++)
+					{
+						sformat(string, sizeof(string), "%.*g",
+								precision, value->val.float8);
+
+						if (strtod(string, NULL) == value->val.float8)
+						{
+							break;
+						}
+					}
 				}
 
 				json_array_append_string(jsArray, string);
