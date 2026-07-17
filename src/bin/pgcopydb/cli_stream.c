@@ -222,8 +222,8 @@ cli_stream_getopts(int argc, char **argv)
 		{ "debug", no_argument, NULL, 'd' },
 		{ "trace", no_argument, NULL, 'z' },
 		{ "quiet", no_argument, NULL, 'q' },
-		{ "cleanup-threshold", required_argument, NULL, 256 },
-		{ "cleanup-min-age", required_argument, NULL, 257 },
+		{ "prune-threshold", required_argument, NULL, 256 },
+		{ "prune-min-age", required_argument, NULL, 257 },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
 	};
@@ -440,18 +440,18 @@ cli_stream_getopts(int argc, char **argv)
 			{
 				if (!cli_parse_bytes_pretty(
 						optarg,
-						&(options.cleanupThresholdBytes),
-						(char *) &(options.cleanupThresholdPretty),
-						sizeof(options.cleanupThresholdPretty)))
+						&(options.pruneThresholdBytes),
+						(char *) &(options.pruneThresholdPretty),
+						sizeof(options.pruneThresholdPretty)))
 				{
-					log_fatal("Failed to parse --cleanup-threshold: \"%s\"",
+					log_fatal("Failed to parse --prune-threshold: \"%s\"",
 							  optarg);
 					++errors;
 				}
 
-				log_trace("--cleanup-threshold %s (%lld)",
-						  options.cleanupThresholdPretty,
-						  (long long) options.cleanupThresholdBytes);
+				log_trace("--prune-threshold %s (%lld)",
+						  options.pruneThresholdPretty,
+						  (long long) options.pruneThresholdBytes);
 				break;
 			}
 
@@ -459,19 +459,19 @@ cli_stream_getopts(int argc, char **argv)
 			{
 				if (!cli_parse_duration(
 						optarg,
-						&(options.cleanupMinAgeSeconds)))
+						&(options.pruneMinAgeSeconds)))
 				{
-					log_fatal("Failed to parse --cleanup-min-age: \"%s\"",
+					log_fatal("Failed to parse --prune-min-age: \"%s\"",
 							  optarg);
 					++errors;
 				}
 
-				strlcpy(options.cleanupMinAgePretty, optarg,
-						sizeof(options.cleanupMinAgePretty));
+				strlcpy(options.pruneMinAgePretty, optarg,
+						sizeof(options.pruneMinAgePretty));
 
-				log_trace("--cleanup-min-age %s (%d seconds)",
-						  options.cleanupMinAgePretty,
-						  options.cleanupMinAgeSeconds);
+				log_trace("--prune-min-age %s (%d seconds)",
+						  options.pruneMinAgePretty,
+						  options.pruneMinAgeSeconds);
 				break;
 			}
 
@@ -513,21 +513,21 @@ cli_stream_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	if (options.cleanupThresholdBytes == 0 && options.cleanupMinAgeSeconds > 0)
+	if (options.pruneThresholdBytes == 0 && options.pruneMinAgeSeconds > 0)
 	{
-		log_warn("--cleanup-min-age has no effect without --cleanup-threshold");
+		log_warn("--prune-min-age has no effect without --prune-threshold");
 	}
 
 	/*
-	 * When cleanup threshold is set but min-age wasn't explicitly provided,
+	 * When prune threshold is set but min-age wasn't explicitly provided,
 	 * default to 15 minutes (900 seconds) for safety.
 	 */
-	if (options.cleanupThresholdBytes > 0 && options.cleanupMinAgeSeconds == 0 &&
-		options.cleanupMinAgePretty[0] == '\0')
+	if (options.pruneThresholdBytes > 0 && options.pruneMinAgeSeconds == 0 &&
+		options.pruneMinAgePretty[0] == '\0')
 	{
-		options.cleanupMinAgeSeconds = 900;
-		strlcpy(options.cleanupMinAgePretty, "15m",
-				sizeof(options.cleanupMinAgePretty));
+		options.pruneMinAgeSeconds = 900;
+		strlcpy(options.pruneMinAgePretty, "15m",
+				sizeof(options.pruneMinAgePretty));
 	}
 
 	if (errors > 0)
@@ -644,8 +644,8 @@ cli_stream_setup(int argc, char **argv)
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL,
-						   streamDBoptions.cleanupThresholdBytes,
-						   streamDBoptions.cleanupMinAgeSeconds))
+						   streamDBoptions.pruneThresholdBytes,
+						   streamDBoptions.pruneMinAgeSeconds))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -790,8 +790,8 @@ cli_stream_catchup(int argc, char **argv)
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL,
-						   streamDBoptions.cleanupThresholdBytes,
-						   streamDBoptions.cleanupMinAgeSeconds))
+						   streamDBoptions.pruneThresholdBytes,
+						   streamDBoptions.pruneMinAgeSeconds))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -876,8 +876,8 @@ cli_stream_replay(int argc, char **argv)
 						   true,  /* stdin */
 						   true, /* stdout */
 						   logSQL,
-						   streamDBoptions.cleanupThresholdBytes,
-						   streamDBoptions.cleanupMinAgeSeconds))
+						   streamDBoptions.pruneThresholdBytes,
+						   streamDBoptions.pruneMinAgeSeconds))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -1004,8 +1004,8 @@ cli_stream_transform(int argc, char **argv)
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL,
-						   streamDBoptions.cleanupThresholdBytes,
-						   streamDBoptions.cleanupMinAgeSeconds))
+						   streamDBoptions.pruneThresholdBytes,
+						   streamDBoptions.pruneMinAgeSeconds))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -1169,8 +1169,8 @@ cli_stream_apply(int argc, char **argv)
 							   true, /* streamDBoptions.stdIn */
 							   false, /* streamDBoptions.stdOut */
 							   logSQL,
-							   streamDBoptions.cleanupThresholdBytes,
-							   streamDBoptions.cleanupMinAgeSeconds))
+							   streamDBoptions.pruneThresholdBytes,
+							   streamDBoptions.pruneMinAgeSeconds))
 		{
 			/* errors have already been logged */
 			exit(EXIT_CODE_INTERNAL_ERROR);
@@ -1284,8 +1284,8 @@ stream_start_in_mode(LogicalStreamMode mode)
 						   streamDBoptions.stdIn,
 						   streamDBoptions.stdOut,
 						   logSQL,
-						   streamDBoptions.cleanupThresholdBytes,
-						   streamDBoptions.cleanupMinAgeSeconds))
+						   streamDBoptions.pruneThresholdBytes,
+						   streamDBoptions.pruneMinAgeSeconds))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

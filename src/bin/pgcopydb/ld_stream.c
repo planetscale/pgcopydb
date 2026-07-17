@@ -53,8 +53,8 @@ stream_init_specs(StreamSpecs *specs,
 				  bool stdin,
 				  bool stdout,
 				  bool logSQL,
-				  uint64_t cleanupThresholdBytes,
-				  int cleanupMinAgeSeconds)
+				  uint64_t pruneThresholdBytes,
+				  int pruneMinAgeSeconds)
 {
 	/* just copy into StreamSpecs what's been initialized in copySpecs */
 	specs->mode = mode;
@@ -152,8 +152,8 @@ stream_init_specs(StreamSpecs *specs,
 		return false;
 	}
 
-	specs->cleanupThresholdBytes = cleanupThresholdBytes;
-	specs->cleanupMinAgeSeconds = cleanupMinAgeSeconds;
+	specs->pruneThresholdBytes = pruneThresholdBytes;
+	specs->pruneMinAgeSeconds = pruneMinAgeSeconds;
 
 	log_trace("stream_init_specs: %s(%d)",
 			  OutputPluginToString(slot->plugin),
@@ -182,16 +182,16 @@ stream_init_specs(StreamSpecs *specs,
 		.pid = -1
 	};
 
-	FollowSubProcess cleanup = {
-		.name = "cleanup",
-		.command = &follow_start_cleanup,
+	FollowSubProcess prune = {
+		.name = "prune",
+		.command = &follow_start_prune,
 		.pid = -1
 	};
 
 	specs->prefetch = prefetch;
 	specs->transform = transform;
 	specs->catchup = catchup;
-	specs->cleanup = cleanup;
+	specs->prune = prune;
 
 	switch (specs->mode)
 	{

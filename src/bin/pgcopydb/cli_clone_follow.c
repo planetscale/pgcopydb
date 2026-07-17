@@ -72,8 +72,8 @@
 	"  --defer-analyze               Defer ANALYZE until after post-data restore\n" \
 	"  --defer-validate-fks          Create FK constraints as NOT VALID, skipping validation scan\n" \
 	"  --use-copy-binary             Use the COPY BINARY format for COPY operations\n" \
-	"  --cleanup-threshold           Max size of applied CDC files to retain (e.g. 10GB, 0 to disable)\n" \
-	"  --cleanup-min-age             Min age before applied CDC files can be deleted (e.g. 15m, 2h)\n" \
+	"  --prune-threshold           Max size of applied CDC files to retain (e.g. 10GB, 0 to disable)\n" \
+	"  --prune-min-age             Min age before applied CDC files can be deleted (e.g. 15m, 2h)\n" \
 
 CommandLine clone_command =
 	make_command(
@@ -113,8 +113,8 @@ CommandLine follow_command =
 		"  --create-slot                 Create the replication slot\n"
 		"  --origin                      Use this Postgres replication origin node name\n"
 		"  --endpos                      Stop replaying changes when reaching this LSN\n"
-		"  --cleanup-threshold           Max size of applied CDC files to retain (e.g. 10GB, 0 to disable)\n"
-		"  --cleanup-min-age             Min age before applied CDC files can be deleted (e.g. 15m, 2h)\n",
+		"  --prune-threshold           Max size of applied CDC files to retain (e.g. 10GB, 0 to disable)\n"
+		"  --prune-min-age             Min age before applied CDC files can be deleted (e.g. 15m, 2h)\n",
 		cli_copy_db_getopts,
 		cli_follow);
 
@@ -230,8 +230,8 @@ clone_and_follow(CopyDataSpec *copySpecs)
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut,
 						   logSQL,
-						   copyDBoptions.cleanupThresholdBytes,
-						   copyDBoptions.cleanupMinAgeSeconds))
+						   copyDBoptions.pruneThresholdBytes,
+						   copyDBoptions.pruneMinAgeSeconds))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -568,8 +568,8 @@ cli_follow(int argc, char **argv)
 						   copyDBoptions.stdIn,
 						   copyDBoptions.stdOut,
 						   logSQL,
-						   copyDBoptions.cleanupThresholdBytes,
-						   copyDBoptions.cleanupMinAgeSeconds))
+						   copyDBoptions.pruneThresholdBytes,
+						   copyDBoptions.pruneMinAgeSeconds))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);

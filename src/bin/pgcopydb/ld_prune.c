@@ -1,6 +1,6 @@
 /*
- * src/bin/pgcopydb/ld_cleanup.c
- *     CDC file cleanup watchdog for pgcopydb.
+ * src/bin/pgcopydb/ld_prune.c
+ *     CDC file prune watchdog for pgcopydb.
  *
  *     Periodically scans the CDC directory and removes .json and .sql files
  *     that have already been applied (fileLSN < replayLSN) once total applied
@@ -21,15 +21,15 @@
 
 #include "copydb.h"
 #include "file_utils.h"
-#include "ld_cleanup.h"
+#include "ld_prune.h"
 #include "ld_stream.h"
 #include "log.h"
 #include "signals.h"
 #include "string_utils.h"
 
 
-#define CDC_CLEANUP_CYCLE_SECONDS 30
-#define CDC_CLEANUP_MAX_FILES 16384
+#define CDC_PRUNE_CYCLE_SECONDS 30
+#define CDC_PRUNE_MAX_FILES 16384
 
 
 typedef struct CDCFileEntry
@@ -42,7 +42,7 @@ typedef struct CDCFileEntry
 
 
 /*
- * cdc_file_is_eligible returns true when a CDC file is eligible for cleanup:
+ * cdc_file_is_eligible returns true when a CDC file is eligible for pruning:
  * its LSN is behind the replay position and it is at least minAgeSeconds old.
  */
 bool
@@ -95,19 +95,19 @@ find_oldest_entry(CDCFileEntry *entries, int count,
 
 
 /*
- * cdc_cleanup_loop is the main watchdog loop that runs in a forked subprocess.
+ * cdc_prune_loop is the main watchdog loop that runs in a forked subprocess.
  * It periodically scans the CDC directory and removes old applied files when
  * the total size of applied files exceeds the configured threshold.
  */
 bool
-cdc_cleanup_loop(struct StreamSpecs *specs)
+cdc_prune_loop(struct StreamSpecs *specs)
 {
-	uint64_t thresholdBytes = specs->cleanupThresholdBytes;
-	int minAgeSeconds = specs->cleanupMinAgeSeconds;
+	uint64_t thresholdBytes = specs->pruneThresholdBytes;
+	int minAgeSeconds = specs->pruneMinAgeSeconds;
 	uint32_t WalSegSz = specs->WalSegSz;
 	char *cdcDir = specs->paths.dir;
 
-	log_info("CDC cleanup watchdog started: threshold %llu bytes, "
+	log_info("CDC prune watchdog started: threshold %llu bytes, "
 			 "min age %d seconds, dir %s",
 			 (unsigned long long) thresholdBytes,
 			 minAgeSeconds,
@@ -116,14 +116,14 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 	while (true)
 	{
 		/*
-		 * Sleep in 1-second increments for CDC_CLEANUP_CYCLE_SECONDS,
+		 * Sleep in 1-second increments for CDC_PRUNE_CYCLE_SECONDS,
 		 * checking signal flags each second.
 		 */
-		for (int i = 0; i < CDC_CLEANUP_CYCLE_SECONDS; i++)
+		for (int i = 0; i < CDC_PRUNE_CYCLE_SECONDS; i++)
 		{
 			if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 			{
-				log_info("CDC cleanup watchdog received shutdown signal");
+				log_info("CDC prune watchdog received shutdown signal");
 				return true;
 			}
 
@@ -132,7 +132,7 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
-			log_info("CDC cleanup watchdog received shutdown signal");
+			log_info("CDC prune watchdog received shutdown signal");
 			return true;
 		}
 
@@ -144,14 +144,14 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 		{
 			if (!file_exists(specs->paths.walsegsizefile))
 			{
-				log_debug("CDC cleanup: context files not ready yet, "
+				log_debug("CDC prune: context files not ready yet, "
 						  "will retry next cycle");
 				continue;
 			}
 
 			if (!stream_read_context(specs))
 			{
-				log_warn("CDC cleanup: failed to read context, "
+				log_warn("CDC prune: failed to read context, "
 						 "will retry next cycle");
 				continue;
 			}
@@ -160,7 +160,7 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 
 			if (WalSegSz == 0)
 			{
-				log_debug("CDC cleanup: WalSegSz still unknown, "
+				log_debug("CDC prune: WalSegSz still unknown, "
 						  "will retry next cycle");
 				continue;
 			}
@@ -171,7 +171,7 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 
 		if (!sentinel_get(specs->sourceDB, &sentinel))
 		{
-			log_warn("CDC cleanup: failed to read sentinel, "
+			log_warn("CDC prune: failed to read sentinel, "
 					 "will retry next cycle");
 			continue;
 		}
@@ -180,7 +180,7 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 
 		if (replayLSN == 0)
 		{
-			log_debug("CDC cleanup: replay_lsn is 0, nothing to clean");
+			log_debug("CDC prune: replay_lsn is 0, nothing to prune");
 			continue;
 		}
 
@@ -189,16 +189,16 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 
 		if (dir == NULL)
 		{
-			log_warn("CDC cleanup: failed to open directory %s: %m", cdcDir);
+			log_warn("CDC prune: failed to open directory %s: %m", cdcDir);
 			continue;
 		}
 
-		CDCFileEntry *entries = (CDCFileEntry *) calloc(CDC_CLEANUP_MAX_FILES,
+		CDCFileEntry *entries = (CDCFileEntry *) calloc(CDC_PRUNE_MAX_FILES,
 														sizeof(CDCFileEntry));
 
 		if (entries == NULL)
 		{
-			log_error("CDC cleanup: failed to allocate file entry array");
+			log_error("CDC prune: failed to allocate file entry array");
 			closedir(dir);
 			continue;
 		}
@@ -235,7 +235,7 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 
 			if (!IsXLogFileName(barename))
 			{
-				log_debug("CDC cleanup: skipping non-WAL file %s", name);
+				log_debug("CDC prune: skipping non-WAL file %s", name);
 				continue;
 			}
 
@@ -261,11 +261,11 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 
 			if (stat(fullpath, &st) != 0)
 			{
-				log_debug("CDC cleanup: stat failed for %s: %m", fullpath);
+				log_debug("CDC prune: stat failed for %s: %m", fullpath);
 				continue;
 			}
 
-			if (entryCount < CDC_CLEANUP_MAX_FILES)
+			if (entryCount < CDC_PRUNE_MAX_FILES)
 			{
 				totalAppliedBytes += st.st_size;
 				CDCFileEntry *entry = &entries[entryCount++];
@@ -277,16 +277,16 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 			}
 		}
 
-		if (entryCount >= CDC_CLEANUP_MAX_FILES)
+		if (entryCount >= CDC_PRUNE_MAX_FILES)
 		{
-			log_warn("CDC cleanup: more than %d applied files found; "
+			log_warn("CDC prune: more than %d applied files found; "
 					 "excess files are not tracked for deletion",
-					 CDC_CLEANUP_MAX_FILES);
+					 CDC_PRUNE_MAX_FILES);
 		}
 
 		closedir(dir);
 
-		log_debug("CDC cleanup: found %d applied files, "
+		log_debug("CDC prune: found %d applied files, "
 				  "total %llu bytes (threshold %llu)",
 				  entryCount,
 				  (unsigned long long) totalAppliedBytes,
@@ -328,7 +328,7 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 
 			if (unlink(entry->path) != 0)
 			{
-				log_warn("CDC cleanup: failed to delete %s: %m", entry->path);
+				log_warn("CDC prune: failed to delete %s: %m", entry->path);
 				entry->path[0] = '\0';
 				continue;
 			}
@@ -336,7 +336,7 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 			freedBytes += entry->size;
 			deletedCount++;
 
-			log_debug("CDC cleanup: deleted %s (%lld bytes, age %.0fs)",
+			log_debug("CDC prune: deleted %s (%lld bytes, age %.0fs)",
 					  entry->path,
 					  (long long) entry->size,
 					  difftime(now, entry->mtime));
@@ -367,14 +367,14 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 
 			CDCFileEntry *entry = &entries[idx];
 
-			log_notice("CDC cleanup: disk pressure override, "
+			log_notice("CDC prune: disk pressure override, "
 					   "deleting young file %s (age %.0fs)",
 					   entry->path,
 					   difftime(now, entry->mtime));
 
 			if (unlink(entry->path) != 0)
 			{
-				log_warn("CDC cleanup: failed to delete %s: %m",
+				log_warn("CDC prune: failed to delete %s: %m",
 						 entry->path);
 				entry->path[0] = '\0';
 				continue;
@@ -387,7 +387,7 @@ cdc_cleanup_loop(struct StreamSpecs *specs)
 
 		if (deletedCount > 0)
 		{
-			log_info("CDC cleanup: deleted %d files, freed %llu bytes",
+			log_info("CDC prune: deleted %d files, freed %llu bytes",
 					 deletedCount,
 					 (unsigned long long) freedBytes);
 		}

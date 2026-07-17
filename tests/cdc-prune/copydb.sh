@@ -52,23 +52,23 @@ SHAREDIR=/var/lib/postgres/.local/share/pgcopydb
 pre_count=$(find ${SHAREDIR}/cdc -name '*.json' -o -name '*.sql' 2>/dev/null | wc -l || echo 0)
 echo "CDC files before follow: ${pre_count}"
 
-# run follow with a small cleanup threshold and short min age to force cleanup
+# run follow with a small prune threshold and short min age to force pruning
 pgcopydb follow --resume --endpos "${lsn}" \
-    --cleanup-threshold 1MB \
-    --cleanup-min-age 10s \
+    --prune-threshold 1MB \
+    --prune-min-age 10s \
     -vv
 
 # count remaining CDC files after follow completes
 remaining=$(find ${SHAREDIR}/cdc -name '*.json' -o -name '*.sql' 2>/dev/null | wc -l)
-echo "Remaining CDC files after follow with cleanup: ${remaining}"
+echo "Remaining CDC files after follow with pruning: ${remaining}"
 
 # We can't assert an exact count because it depends on WAL segment boundaries
-# and timing, but we can verify cleanup ran by checking the log output and
+# and timing, but we can verify pruning ran by checking the log output and
 # that not all files are still present.
 # The important thing is that pgcopydb follow completed successfully with
-# the cleanup flags enabled.
+# the prune flags enabled.
 
-echo "CDC cleanup integration test passed"
+echo "CDC prune integration test passed"
 
 # verify the stream cleanup command still works
 pgcopydb stream cleanup

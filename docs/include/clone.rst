@@ -49,6 +49,6 @@
      --defer-analyze               Defer ANALYZE until after post-data restore
      --defer-validate-fks          Create FK constraints as NOT VALID, skipping validation scan
      --use-copy-binary             Use the COPY BINARY format for COPY operations
-     --cleanup-threshold           Max size of applied CDC files to retain (e.g. 10GB, 0 to disable)
-     --cleanup-min-age             Min age before applied CDC files can be deleted (e.g. 15m, 2h)
+     --prune-threshold           Max size of applied CDC files to retain (e.g. 10GB, 0 to disable)
+     --prune-min-age             Min age before applied CDC files can be deleted (e.g. 15m, 2h)
    

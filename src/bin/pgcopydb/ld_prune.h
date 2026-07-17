@@ -1,10 +1,10 @@
 /*
- * src/bin/pgcopydb/ld_cleanup.h
- *     CDC file cleanup watchdog for pgcopydb
+ * src/bin/pgcopydb/ld_prune.h
+ *     CDC file prune watchdog for pgcopydb
  */
 
-#ifndef LD_CLEANUP_H
-#define LD_CLEANUP_H
+#ifndef LD_PRUNE_H
+#define LD_PRUNE_H
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -19,6 +19,6 @@ bool cdc_file_is_eligible(uint64_t fileLSN,
 						  time_t now,
 						  int minAgeSeconds);
 
-bool cdc_cleanup_loop(struct StreamSpecs *specs);
+bool cdc_prune_loop(struct StreamSpecs *specs);
 
-#endif /* LD_CLEANUP_H */
+#endif /* LD_PRUNE_H */

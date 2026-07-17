@@ -552,11 +552,11 @@ struct StreamSpecs
 	FollowSubProcess prefetch;
 	FollowSubProcess transform;
 	FollowSubProcess catchup;
-	FollowSubProcess cleanup;
+	FollowSubProcess prune;
 
-	/* CDC file cleanup configuration */
-	uint64_t cleanupThresholdBytes;
-	int cleanupMinAgeSeconds;
+	/* CDC file prune configuration */
+	uint64_t pruneThresholdBytes;
+	int pruneMinAgeSeconds;
 
 	/* transform needs some catalog lookups (pkey, type oid) */
 	DatabaseCatalog *sourceDB;
@@ -596,8 +596,8 @@ bool stream_init_specs(StreamSpecs *specs,
 					   bool stdIn,
 					   bool stdOut,
 					   bool logSQL,
-					   uint64_t cleanupThresholdBytes,
-					   int cleanupMinAgeSeconds);
+					   uint64_t pruneThresholdBytes,
+					   int pruneMinAgeSeconds);
 
 bool stream_init_for_mode(StreamSpecs *specs, LogicalStreamMode mode);
 
@@ -813,7 +813,7 @@ bool follow_start_subprocess(StreamSpecs *specs, FollowSubProcess *subprocess);
 bool follow_start_prefetch(StreamSpecs *specs);
 bool follow_start_transform(StreamSpecs *specs);
 bool follow_start_catchup(StreamSpecs *specs);
-bool follow_start_cleanup(StreamSpecs *specs);
+bool follow_start_prune(StreamSpecs *specs);
 
 void follow_exit_early(StreamSpecs *specs);
 bool follow_wait_subprocesses(StreamSpecs *specs);
