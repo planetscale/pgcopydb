@@ -235,7 +235,8 @@ copydb_copy_extensions_hook(void *ctx, SourceExtension *ext)
 	{
 		CatalogFilter filter = { 0 };
 
-		if (catalog_lookup_filter_by_oid(context->filtersDB, &filter, ext->oid))
+		if (catalog_lookup_filter_by_oid_only(context->filtersDB, &filter,
+											  ext->oid))
 		{
 			/* Extension is filtered, skip it */
 			return true;
