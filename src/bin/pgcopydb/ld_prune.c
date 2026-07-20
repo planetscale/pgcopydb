@@ -20,6 +20,7 @@
 #include "access/xlogdefs.h"
 
 #include "copydb.h"
+#include "env_utils.h"
 #include "file_utils.h"
 #include "ld_prune.h"
 #include "ld_stream.h"
@@ -107,19 +108,41 @@ cdc_prune_loop(struct StreamSpecs *specs)
 	uint32_t WalSegSz = specs->WalSegSz;
 	char *cdcDir = specs->paths.dir;
 
+	/*
+	 * The watchdog wakes every CDC_PRUNE_CYCLE_SECONDS. Allow shortening the
+	 * cycle via an environment variable, which the integration test relies on
+	 * to observe pruning deterministically (and which is useful for operators
+	 * reacting to disk pressure).
+	 */
+	int cycleSeconds = CDC_PRUNE_CYCLE_SECONDS;
+
+	if (env_exists("PGCOPYDB_CDC_PRUNE_CYCLE_SECONDS"))
+	{
+		char envval[32] = { 0 };
+		int parsed = 0;
+
+		if (get_env_copy("PGCOPYDB_CDC_PRUNE_CYCLE_SECONDS",
+						 envval, sizeof(envval)) &&
+			stringToInt(envval, &parsed) && parsed >= 1)
+		{
+			cycleSeconds = parsed;
+		}
+	}
+
 	log_info("CDC prune watchdog started: threshold %llu bytes, "
-			 "min age %d seconds, dir %s",
+			 "min age %d seconds, cycle %d seconds, dir %s",
 			 (unsigned long long) thresholdBytes,
 			 minAgeSeconds,
+			 cycleSeconds,
 			 cdcDir);
 
 	while (true)
 	{
 		/*
-		 * Sleep in 1-second increments for CDC_PRUNE_CYCLE_SECONDS,
-		 * checking signal flags each second.
+		 * Sleep in 1-second increments for cycleSeconds, checking signal
+		 * flags each second.
 		 */
-		for (int i = 0; i < CDC_PRUNE_CYCLE_SECONDS; i++)
+		for (int i = 0; i < cycleSeconds; i++)
 		{
 			if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 			{

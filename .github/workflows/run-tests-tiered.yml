@@ -145,6 +145,7 @@ jobs:
           - skip-large-objects
           - cdc-low-level
           - cdc-test-decoding
+          - cdc-prune
           - cdc-endpos-between-transaction
           - cdc-filtering
           - cdc-wal2json
