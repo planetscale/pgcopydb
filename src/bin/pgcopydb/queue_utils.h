@@ -14,6 +14,8 @@
 
 #include "postgres.h"
 
+#include "pg_utils.h"
+
 typedef struct Queue
 {
 	char *name;
@@ -52,6 +54,13 @@ typedef struct QMessage
 			uint32_t oid;
 			uint32_t part;
 		} tp;
+
+		/* large objects: oid and owner role (for QMSG_TYPE_BLOBOID) */
+		struct lo
+		{
+			uint32_t oid;
+			char rolname[PG_NAMEDATALEN]; /* format('%I', ...); "" when unknown */
+		} lo;
 	} data;
 } QMessage;
 

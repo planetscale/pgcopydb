@@ -3468,12 +3468,21 @@ pgsql_set_gucs(PGSQL *pgsql, GUC *settings)
  * pg_copy_large_object copies given large object found on the src database
  * into the dst database. The copy includes re-using the same OID for the large
  * objects on both sides.
+ *
+ * When restoreOwner is true and rolname is a non-empty (already quoted)
+ * identifier, the large object ownership is also restored on the target. This
+ * is only necessary on the PG17+ path where pgcopydb creates the large object
+ * itself via lo_create(): the object is then owned by the connecting role,
+ * whereas on PG16 and earlier the pre-data restore recreates it with the
+ * original owner. See the version split documented below.
  */
 bool
 pg_copy_large_object(PGSQL *src,
 					 PGSQL *dst,
 					 bool dropIfExists,
+					 bool restoreOwner,
 					 uint32_t blobOid,
+					 const char *rolname,
 					 uint64_t *bytesTransmitted)
 {
 	log_debug("Copying large object %u", blobOid);
@@ -3694,6 +3703,43 @@ pg_copy_large_object(PGSQL *src,
 
 	lo_close(src->connection, srcfd);
 	lo_close(dst->connection, dstfd);
+
+	/*
+	 * 5. Restore the large object ownership on the target.
+	 *
+	 *    Only needed when we created the object ourselves above (needsCreate),
+	 *    via lo_create(): it is then owned by the connecting role. That happens
+	 *    on PG17+ (pre-data no longer includes large object metadata) and after
+	 *    dropIfExists. When the pre-data restore already recreated the object
+	 *    with its original owner there is nothing to do, and we skip the ALTER
+	 *    to avoid a needless round-trip per large object.
+	 *
+	 *    rolname is already a quoted identifier (format('%I', ...) computed on
+	 *    the source); an empty string means the owner could not be determined,
+	 *    in which case we leave the object owned by the connecting role rather
+	 *    than emit invalid SQL.
+	 */
+	if (needsCreate && restoreOwner && rolname != NULL && rolname[0] != '\0')
+	{
+		char sql[BUFSIZE] = { 0 };
+
+		sformat(sql, sizeof(sql),
+				"ALTER LARGE OBJECT %u OWNER TO %s",
+				blobOid,
+				rolname);
+
+		if (!pgsql_execute(dst, sql))
+		{
+			log_error("Failed to set owner of large object %u to %s",
+					  blobOid,
+					  rolname);
+
+			pgsql_finish(src);
+			pgsql_finish(dst);
+
+			return false;
+		}
+	}
 
 	return true;
 }
