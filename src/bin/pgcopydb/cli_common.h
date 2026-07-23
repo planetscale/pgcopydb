@@ -100,6 +100,12 @@ typedef struct CopyDBOptions
 
 	char filterFileName[MAXPGPATH];
 	char requirementsFileName[MAXPGPATH];
+
+	/* CDC file prune configuration */
+	uint64_t pruneThresholdBytes;
+	char pruneThresholdPretty[BUFSIZE];
+	int pruneMinAgeSeconds;
+	char pruneMinAgePretty[BUFSIZE];
 } CopyDBOptions;
 
 extern bool outputJSON;

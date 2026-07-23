@@ -657,6 +657,8 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "defer-indexes", no_argument, NULL, 257 },
 		{ "defer-analyze", no_argument, NULL, 258 },
 		{ "defer-validate-fks", no_argument, NULL, 259 },
+		{ "prune-threshold", required_argument, NULL, 260 },
+		{ "prune-min-age", required_argument, NULL, 261 },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
 	};
@@ -1159,6 +1161,45 @@ cli_copy_db_getopts(int argc, char **argv)
 				break;
 			}
 
+			case 260:
+			{
+				if (!cli_parse_bytes_pretty(
+						optarg,
+						&(options.pruneThresholdBytes),
+						(char *) &(options.pruneThresholdPretty),
+						sizeof(options.pruneThresholdPretty)))
+				{
+					log_fatal("Failed to parse --prune-threshold: \"%s\"",
+							  optarg);
+					++errors;
+				}
+
+				log_trace("--prune-threshold %s (%lld)",
+						  options.pruneThresholdPretty,
+						  (long long) options.pruneThresholdBytes);
+				break;
+			}
+
+			case 261:
+			{
+				if (!cli_parse_duration(
+						optarg,
+						&(options.pruneMinAgeSeconds)))
+				{
+					log_fatal("Failed to parse --prune-min-age: \"%s\"",
+							  optarg);
+					++errors;
+				}
+
+				strlcpy(options.pruneMinAgePretty, optarg,
+						sizeof(options.pruneMinAgePretty));
+
+				log_trace("--prune-min-age %s (%d seconds)",
+						  options.pruneMinAgePretty,
+						  options.pruneMinAgeSeconds);
+				break;
+			}
+
 			case '?':
 			default:
 			{
@@ -1208,6 +1249,23 @@ cli_copy_db_getopts(int argc, char **argv)
 	{
 		log_fatal("Option --resume requires option --not-consistent");
 		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	if (options.pruneThresholdBytes == 0 && options.pruneMinAgeSeconds > 0)
+	{
+		log_warn("--prune-min-age has no effect without --prune-threshold");
+	}
+
+	/*
+	 * When prune threshold is set but min-age wasn't explicitly provided,
+	 * default to 15 minutes (900 seconds) for safety.
+	 */
+	if (options.pruneThresholdBytes > 0 && options.pruneMinAgeSeconds == 0 &&
+		options.pruneMinAgePretty[0] == '\0')
+	{
+		options.pruneMinAgeSeconds = 900;
+		strlcpy(options.pruneMinAgePretty, "15m",
+				sizeof(options.pruneMinAgePretty));
 	}
 
 	if (errors > 0)
