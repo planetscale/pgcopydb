@@ -234,6 +234,12 @@ partitioned (on the fly) and split between processes:
        COPY (SELECT * FROM source.table WHERE ctid >= '(17775,0)'::tid and ctid < '(23698,0)'::tid)
        COPY (SELECT * FROM source.table WHERE ctid >= '(23698,0)'::tid)
 
+    The number of CTID parts is derived from the total on-disk size of the
+    table (heap plus TOAST), so a table whose size is dominated by TOAST still
+    splits into a sensible number of concurrent COPY processes. A CTID range
+    scan detoasts each row it reads, so splitting the heap page range
+    parallelizes the TOAST reads as well.
+
 
   - To decide if a table COPY processing should be split, the command line
     option ``split-tables-larger-than`` is used, or the environment variable

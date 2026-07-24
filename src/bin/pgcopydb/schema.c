@@ -4144,26 +4144,33 @@ schema_list_partitions(PGSQL *pgsql,
 		max = table->relpages;
 
 		/*
-		 * Get the block size from the origin in the first attempt
-		 * and then memoize it.
+		 * Base the CTID part count on the total on-disk size (heap + TOAST),
+		 * same as the key-based branch, so TOAST-dominant tables split. A CTID
+		 * range scan reads heap rows and detoasts each row on the fly, so
+		 * splitting the heap page range parallelizes the TOAST reads too.
+		 *
+		 * NOTE: relies on table->bytes being pg_table_size (TOAST-inclusive).
+		 * Under --estimate-table-sizes, bytes is a heap-only estimate and this
+		 * degrades to the previous heap-based behavior (acceptable).
 		 */
-		static int blockSize = 0;
-		bool isBlockSizeCached = blockSize != 0;
-		if (!isBlockSizeCached && !pgsql_get_block_size(pgsql, &blockSize))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-		uint64_t pagesPerPart = ceil((double) partSize / blockSize);
-
-		partsCount = ceil((double) table->relpages / (double) pagesPerPart);
+		partsCount = ceil((double) table->bytes / (double) partSize);
 
 		if (splitMaxParts > 0 && partsCount > splitMaxParts)
 		{
 			partsCount = splitMaxParts;
 		}
 
-		partsSize = ceil((double) table->relpages / partsCount);
+		/* cannot create more CTID page-ranges than there are heap pages */
+		if (table->relpages > 0 && partsCount > table->relpages)
+		{
+			partsCount = table->relpages;
+		}
+		else if (table->relpages == 0)
+		{
+			partsCount = 1;
+		}
+
+		partsSize = ceil((double) table->relpages / (double) partsCount);
 	}
 
 	/*

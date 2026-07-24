@@ -57,3 +57,16 @@ pgcopydb list schema --dir ${DIR} ${OPTS} >/dev/null
 pgcopydb list table-parts --dir ${DIR} \
     --schema-name "public" --table-name "table_1" \
     --split-tables-larger-than "10 kB" --split-max-parts 3 2>&1
+
+
+# TOAST-heavy table (~6.5 MB, ~4 heap pages, no integer PK). With a 1 MB
+# threshold the OLD heap-only math gives ceil(4 / (1MB/8KB)) = 1 (no split);
+# the fix bases the part count on total size: ceil(6.5MB/1MB)=7, capped to
+# --split-max-parts 2 => 2 parts.
+DIR=/tmp/unit/toast-split
+pgcopydb list schema --dir ${DIR} --not-consistent \
+    --split-tables-larger-than 1MB --split-max-parts 2 >/dev/null
+
+pgcopydb list table-parts --dir ${DIR} \
+    --schema-name "public" --table-name "table_toast_heavy" \
+    --split-tables-larger-than 1MB --split-max-parts 2 2>&1
