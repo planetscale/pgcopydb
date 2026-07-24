@@ -773,6 +773,21 @@ cloneDB(CopyDataSpec *copySpecs)
 		return false;
 	}
 
+	/*
+	 * On --resume the per-run part/index election tables still hold the pids of
+	 * dead prior-run workers. Clear them now, single-threaded and before any
+	 * table-data worker is forked, so a fresh election among live workers
+	 * re-drives index/constraint creation for split (multi-part) tables.
+	 */
+	if (copySpecs->resume)
+	{
+		if (!copydb_resume_reset_part_election(copySpecs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
 	/* now register in the catalogs the already known startTime */
 	if (!summary_start_timing(sourceDB, TIMING_SECTION_TOTAL))
 	{
