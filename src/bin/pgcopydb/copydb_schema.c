@@ -180,6 +180,45 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 
 
 /*
+ * copydb_resume_reset_part_election clears the per-run "who finished last"
+ * election tables (s_table_parts_done, s_table_indexes_done) so that a
+ * --resume run holds a fresh election among live workers.
+ *
+ * These tables only ever store per-run election tokens (a tableoid and the
+ * getpid() of the worker that observed the last part/index as done); progress
+ * itself lives in the summary table (done_time_epoch). On resume the stored
+ * pids belong to dead prior-run processes, so no live worker matches and the
+ * index/constraint enqueue for a split (multi-part) table is never re-driven.
+ * Clearing the tokens loses no progress and re-enqueue is idempotent
+ * (IF NOT EXISTS / doneTime / foundConstraintOnTarget checks).
+ *
+ * Must run single-threaded before any COPY/table-data worker is forked, or the
+ * workers would race and wipe freshly-elected tokens.
+ */
+bool
+copydb_resume_reset_part_election(CopyDataSpec *specs)
+{
+	DatabaseCatalog *sourceDB = &(specs->catalogs.source);
+
+	log_notice("Resetting stale part/index election state for --resume");
+
+	if (!catalog_execute(sourceDB, "delete from s_table_parts_done"))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_execute(sourceDB, "delete from s_table_indexes_done"))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * copydb_fetch_source_catalog_setup initializes our local catalog cache and
  * checks the setup and cache state.
  */
