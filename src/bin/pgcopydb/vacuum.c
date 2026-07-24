@@ -17,6 +17,9 @@
 #include "signals.h"
 #include "summary.h"
 
+/* number of times to attempt VACUUM ANALYZE when the target connection drops */
+#define VACUUM_ANALYZE_MAX_ATTEMPTS 3
+
 /*
  * vacuum_start_supervisor starts a VACUUM supervisor process.
  */
@@ -324,15 +327,6 @@ vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid)
 		return false;
 	}
 
-	PGSQL dst = { 0 };
-
-	/* initialize our connection to the target database */
-	if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	/* finally, vacuum analyze the table and its indexes */
 	char vacuum[BUFSIZE] = { 0 };
 
@@ -369,13 +363,52 @@ vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid)
 		return false;
 	}
 
-	if (!pgsql_execute(&dst, vacuum))
+	/*
+	 * VACUUM ANALYZE is an optional post-copy optimization. A momentary
+	 * connection loss to the target (e.g. an SSL EOF) should not fail the
+	 * worker, so retry on a lost/broken connection. Each attempt uses a fresh
+	 * connection; pgsql_execute opens it, and the interactive open-retry
+	 * policy absorbs the reconnect wait. Genuine SQL errors leave the
+	 * connection status OK and are not retried.
+	 */
+	bool vacuumed = false;
+
+	for (int attempt = 1; attempt <= VACUUM_ANALYZE_MAX_ATTEMPTS; attempt++)
+	{
+		PGSQL dst = { 0 };
+
+		if (!pgsql_init(&dst, specs->connStrings.target_pguri, PGSQL_CONN_TARGET))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (pgsql_execute(&dst, vacuum))
+		{
+			(void) pgsql_finish(&dst);
+			vacuumed = true;
+			break;
+		}
+
+		/* only a lost/broken connection is worth retrying */
+		bool connectionLost = (dst.status == PG_CONNECTION_BAD);
+		(void) pgsql_finish(&dst);
+
+		if (!connectionLost || attempt == VACUUM_ANALYZE_MAX_ATTEMPTS)
+		{
+			break;
+		}
+
+		log_warn("Retrying VACUUM ANALYZE for %s after target connection loss "
+				 "(attempt %d/%d)",
+				 table.qname, attempt + 1, VACUUM_ANALYZE_MAX_ATTEMPTS);
+	}
+
+	if (!vacuumed)
 	{
 		log_error("Failed to run command, see above for details: %s", vacuum);
 		return false;
 	}
-
-	(void) pgsql_finish(&dst);
 
 	if (!summary_finish_vacuum(sourceDB, &tableSpecs))
 	{

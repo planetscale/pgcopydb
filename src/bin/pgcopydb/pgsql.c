@@ -2296,39 +2296,52 @@ pgsql_execute_log_error(PGSQL *pgsql,
 		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
 
 	/*
-	 * PostgreSQL Error message might contain several lines. Log each of
-	 * them as a separate ERROR line here.
+	 * When the connection is already gone (e.g. an async teardown in
+	 * pgsql_fetch_results already logged the real error and called
+	 * pgsql_finish), PQerrorMessage(NULL) returns the unhelpful literal
+	 * "connection pointer is NULL". Skip the libpq message/PID block in that
+	 * case and use a backend PID of 0, while still logging the useful SQL
+	 * query/params context below. Mirrors the guard in log_connection_error.
 	 */
-	char *message = PQerrorMessage(pgsql->connection);
+	int backendPID = pgsql->connection ? PQbackendPID(pgsql->connection) : 0;
 
-	LinesBuffer lbuf = { 0 };
-
-	/*
-	 * PostgreSQL error message could be a static memory area in the
-	 * code, in which case we are not allowed to edit the text and inject
-	 * newlines. Duplicate the memory area before manipulating it.
-	 *
-	 * Also, because we use the Boehm GC lib, refrain from manually calling
-	 * free() on the newly allocated memory area.
-	 */
-	if (message != NULL)
+	if (pgsql->connection != NULL)
 	{
-		/* make sure message is writable by splitLines */
-		message = strdup(message);
-	}
+		/*
+		 * PostgreSQL Error message might contain several lines. Log each of
+		 * them as a separate ERROR line here.
+		 */
+		char *message = PQerrorMessage(pgsql->connection);
 
-	if (!splitLines(&lbuf, message))
-	{
-		/* errors have already been logged */
-		return;
-	}
+		LinesBuffer lbuf = { 0 };
 
-	for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
-	{
-		log_error("[%s %d] %s",
-				  endpoint,
-				  PQbackendPID(pgsql->connection),
-				  lbuf.lines[lineNumber]);
+		/*
+		 * PostgreSQL error message could be a static memory area in the
+		 * code, in which case we are not allowed to edit the text and inject
+		 * newlines. Duplicate the memory area before manipulating it.
+		 *
+		 * Also, because we use the Boehm GC lib, refrain from manually calling
+		 * free() on the newly allocated memory area.
+		 */
+		if (message != NULL)
+		{
+			/* make sure message is writable by splitLines */
+			message = strdup(message);
+		}
+
+		if (!splitLines(&lbuf, message))
+		{
+			/* errors have already been logged */
+			return;
+		}
+
+		for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
+		{
+			log_error("[%s %d] %s",
+					  endpoint,
+					  backendPID,
+					  lbuf.lines[lineNumber]);
+		}
 	}
 
 	if (pgsql->logSQL)
@@ -2338,7 +2351,7 @@ pgsql_execute_log_error(PGSQL *pgsql,
 		{
 			log_error("[%s %d] SQL query: %s",
 					  endpoint,
-					  PQbackendPID(pgsql->connection),
+					  backendPID,
 					  sql);
 		}
 
@@ -2346,7 +2359,7 @@ pgsql_execute_log_error(PGSQL *pgsql,
 		{
 			log_error("[%s %d] SQL params: %s",
 					  endpoint,
-					  PQbackendPID(pgsql->connection),
+					  backendPID,
 					  debugParameters->data);
 		}
 	}
@@ -4645,6 +4658,13 @@ pgsql_stream_log_error(PGSQL *pgsql, PGresult *res, const char *message)
 	}
 
 	clear_results(pgsql);
+
+	/*
+	 * This function always tears the connection down. Mark it bad first so
+	 * callers can distinguish a lost/broken connection (worth retrying) from a
+	 * genuine SQL error via pgsql->status.
+	 */
+	pgsql->status = PG_CONNECTION_BAD;
 	pgsql_finish(pgsql);
 }
 
