@@ -4144,14 +4144,9 @@ schema_list_partitions(PGSQL *pgsql,
 		max = table->relpages;
 
 		/*
-		 * Base the CTID part count on the total on-disk size (heap + TOAST),
-		 * same as the key-based branch, so TOAST-dominant tables split. A CTID
-		 * range scan reads heap rows and detoasts each row on the fly, so
-		 * splitting the heap page range parallelizes the TOAST reads too.
-		 *
-		 * NOTE: relies on table->bytes being pg_table_size (TOAST-inclusive).
-		 * Under --estimate-table-sizes, bytes is a heap-only estimate and this
-		 * degrades to the previous heap-based behavior (acceptable).
+		 * Base the part count on total on-disk size (heap + TOAST) so
+		 * TOAST-dominant tables split. Under --estimate-table-sizes, bytes is
+		 * heap-only and this degrades to the prior heap-based behavior.
 		 */
 		partsCount = ceil((double) table->bytes / (double) partSize);
 

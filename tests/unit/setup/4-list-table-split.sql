@@ -100,17 +100,15 @@ from
     table_ctid_candidate;
 
 -- TOAST-dominant table, no integer PK: tiny heap, large out-of-line TOAST.
--- Exercises CTID split part-count based on total size (heap + TOAST). With
--- STORAGE EXTERNAL, TOAST is not compressed, so the out-of-line size is stable
--- across PG 16/17/18. Physical shape: heap ~4 pages, TOAST ~6.4 MB,
--- pg_table_size ~6.5 MB.
+-- STORAGE EXTERNAL disables compression so the size is stable across PG
+-- versions (heap ~4 pages, pg_table_size ~6.5 MB).
 
 create table table_toast_heavy (
-    id integer,          -- no PK/unique index => CTID fallback
+    id integer,
     payload text
 );
 alter table table_toast_heavy alter column payload set storage external;
 
 insert into table_toast_heavy (id, payload)
-select g, repeat(md5(g::text), 400)   -- ~12.8 KB/row > 2KB => out-of-line TOAST
+select g, repeat(md5(g::text), 400)
 from generate_series(1, 500) g;
