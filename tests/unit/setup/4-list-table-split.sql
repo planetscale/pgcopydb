@@ -98,3 +98,17 @@ select
     *
 from
     table_ctid_candidate;
+
+-- TOAST-dominant table, no integer PK: tiny heap, large out-of-line TOAST.
+-- STORAGE EXTERNAL disables compression so the size is stable across PG
+-- versions (heap ~4 pages, pg_table_size ~6.5 MB).
+
+create table table_toast_heavy (
+    id integer,
+    payload text
+);
+alter table table_toast_heavy alter column payload set storage external;
+
+insert into table_toast_heavy (id, payload)
+select g, repeat(md5(g::text), 400)
+from generate_series(1, 500) g;

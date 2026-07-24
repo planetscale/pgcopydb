@@ -4144,26 +4144,28 @@ schema_list_partitions(PGSQL *pgsql,
 		max = table->relpages;
 
 		/*
-		 * Get the block size from the origin in the first attempt
-		 * and then memoize it.
+		 * Base the part count on total on-disk size (heap + TOAST) so
+		 * TOAST-dominant tables split. Under --estimate-table-sizes, bytes is
+		 * heap-only and this degrades to the prior heap-based behavior.
 		 */
-		static int blockSize = 0;
-		bool isBlockSizeCached = blockSize != 0;
-		if (!isBlockSizeCached && !pgsql_get_block_size(pgsql, &blockSize))
-		{
-			/* errors have already been logged */
-			return false;
-		}
-		uint64_t pagesPerPart = ceil((double) partSize / blockSize);
-
-		partsCount = ceil((double) table->relpages / (double) pagesPerPart);
+		partsCount = ceil((double) table->bytes / (double) partSize);
 
 		if (splitMaxParts > 0 && partsCount > splitMaxParts)
 		{
 			partsCount = splitMaxParts;
 		}
 
-		partsSize = ceil((double) table->relpages / partsCount);
+		/* cannot create more CTID page-ranges than there are heap pages */
+		if (table->relpages > 0 && partsCount > table->relpages)
+		{
+			partsCount = table->relpages;
+		}
+		else if (table->relpages == 0)
+		{
+			partsCount = 1;
+		}
+
+		partsSize = ceil((double) table->relpages / (double) partsCount);
 	}
 
 	/*
