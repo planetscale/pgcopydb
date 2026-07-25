@@ -1139,3 +1139,102 @@ filters_from_json(const char *jsonString, SourceFilters *filters)
 
 	return true;
 }
+
+
+/*
+ * shouldFilterOutTable checks if a given table should be filtered out based
+ * on the configured filters. It scans the in-memory filter lists only (no
+ * catalog or database access) and returns false when filters is NULL, so it
+ * fails open. Shared by CDC transform-time and apply-time filtering.
+ */
+bool
+shouldFilterOutTable(const char *nspname, const char *relname,
+					 SourceFilters *filters)
+{
+	if (filters == NULL)
+	{
+		return false;
+	}
+
+	/* Check exclude-schema filter */
+	for (int i = 0; i < filters->excludeSchemaList.count; i++)
+	{
+		if (strcmp(filters->excludeSchemaList.array[i].nspname, nspname) == 0)
+		{
+			log_trace("Filtering out table \"%s\".\"%s\" (schema in exclude-schema list)",
+					  nspname, relname);
+			return true;
+		}
+	}
+
+	/* Check include-only-schema filter */
+	if (filters->includeOnlySchemaList.count > 0)
+	{
+		bool found = false;
+		for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
+		{
+			if (strcmp(filters->includeOnlySchemaList.array[i].nspname, nspname) == 0)
+			{
+				found = true;
+				break;
+			}
+		}
+		if (!found)
+		{
+			log_trace(
+				"Filtering out table \"%s\".\"%s\" (schema not in include-only-schema list)",
+				nspname, relname);
+			return true;
+		}
+	}
+
+	/* Check include-only-table filter */
+	if (filters->includeOnlyTableList.count > 0)
+	{
+		bool found = false;
+		for (int i = 0; i < filters->includeOnlyTableList.count; i++)
+		{
+			SourceFilterTable *table = &(filters->includeOnlyTableList.array[i]);
+			if (strcmp(table->nspname, nspname) == 0 &&
+				strcmp(table->relname, relname) == 0)
+			{
+				found = true;
+				break;
+			}
+		}
+		if (!found)
+		{
+			log_trace("Filtering out table \"%s\".\"%s\" (not in include-only list)",
+					  nspname, relname);
+			return true;
+		}
+	}
+
+	/* Check exclude-table filter */
+	for (int i = 0; i < filters->excludeTableList.count; i++)
+	{
+		SourceFilterTable *table = &(filters->excludeTableList.array[i]);
+		if (strcmp(table->nspname, nspname) == 0 &&
+			strcmp(table->relname, relname) == 0)
+		{
+			log_trace("Filtering out table \"%s\".\"%s\" (in exclude-table list)",
+					  nspname, relname);
+			return true;
+		}
+	}
+
+	/* Check exclude-table-data filter */
+	for (int i = 0; i < filters->excludeTableDataList.count; i++)
+	{
+		SourceFilterTable *table = &(filters->excludeTableDataList.array[i]);
+		if (strcmp(table->nspname, nspname) == 0 &&
+			strcmp(table->relname, relname) == 0)
+		{
+			log_trace("Filtering out table \"%s\".\"%s\" (in exclude-table-data list)",
+					  nspname, relname);
+			return true;
+		}
+	}
+
+	return false;
+}

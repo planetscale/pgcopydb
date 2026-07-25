@@ -426,6 +426,9 @@ stream_init_context(StreamSpecs *specs)
 	/* transform needs some catalog lookups (pkey, type oid) */
 	privateContext->sourceDB = specs->sourceDB;
 
+	/* table filtering configuration, used by parseMessage() at transform time */
+	privateContext->filters = specs->filters;
+
 	return true;
 }
 

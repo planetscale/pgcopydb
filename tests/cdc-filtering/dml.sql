@@ -28,5 +28,19 @@ INSERT INTO excluded_schema.test_table (data) VALUES
 
 UPDATE excluded_schema.test_table SET data = 'updated but should not appear' WHERE id = 1;
 
+-- CDC changes to public.filtered_events (excluded by [exclude-table], should be FILTERED OUT)
+INSERT INTO public.filtered_events (payload) VALUES
+    ('cdc event that must not appear on target');
+
+UPDATE public.filtered_events SET payload = 'updated but excluded' WHERE id = 1;
+
+-- A transaction that touches ONLY excluded tables: after transform-time
+-- filtering this becomes an empty transaction, which must still advance the
+-- replication origin (BEGIN/COMMIT emitted) so the migration does not stall.
+BEGIN;
+INSERT INTO cron.job_run_details (job_id, status) VALUES (5, 'excluded-only-txn');
+INSERT INTO public.filtered_events (payload) VALUES ('excluded-only-txn');
+COMMIT;
+
 -- More public changes (should be applied)
 UPDATE public.users SET username = 'robert' WHERE username = 'bob';

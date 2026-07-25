@@ -139,4 +139,7 @@ bool parse_filters(const char *filebname, SourceFilters *filters);
 bool filters_as_json(SourceFilters *filters, JSON_Value *jsFilter);
 bool filters_from_json(const char *jsonString, SourceFilters *filters);
 
+bool shouldFilterOutTable(const char *nspname, const char *relname,
+						  SourceFilters *filters);
+
 #endif  /* FILTERING_H */

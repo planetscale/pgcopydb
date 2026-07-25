@@ -36,6 +36,12 @@ CREATE TABLE excluded_schema.test_table (
     data text
 );
 
+-- Table in the included public schema but excluded by [exclude-table]
+CREATE TABLE public.filtered_events (
+    id serial PRIMARY KEY,
+    payload text
+);
+
 -- Insert initial data in public schema
 INSERT INTO public.users (username, email) VALUES
     ('alice', 'alice@example.com'),
@@ -56,3 +62,6 @@ INSERT INTO cron.scheduled_jobs (job_name, schedule) VALUES
 
 INSERT INTO excluded_schema.test_table (data) VALUES
     ('should not be copied');
+
+INSERT INTO public.filtered_events (payload) VALUES
+    ('seed event, excluded by exclude-table');
