@@ -28,3 +28,10 @@ SELECT count(*) as excluded_schema_exists
 FROM information_schema.schemata
 WHERE schema_name = 'excluded_schema';
 -- Should be 0 (schema should not exist)
+
+-- Verify public.filtered_events was EXCLUDED by [exclude-table]
+SELECT 'Checking public.filtered_events exclusion' as test;
+SELECT count(*) as filtered_events_exists
+FROM information_schema.tables
+WHERE table_schema = 'public' AND table_name = 'filtered_events';
+-- Should be 0 (table excluded from the migration entirely)

@@ -1155,6 +1155,55 @@ stream_transform_file(StreamSpecs *specs, char *jsonfilename, char *sqlfilename)
 
 
 /*
+ * dequoteIdentifier writes the bare form of a possibly double-quoted SQL
+ * identifier into out. wal2json stores identifiers escaped by
+ * pgsql_escape_identifier (e.g. "public", or "Weird""Name"), whereas filter
+ * lists hold bare names; this strips the surrounding quotes and collapses
+ * doubled "" back to a single ". Identifiers without surrounding quotes (e.g.
+ * from test_decoding) are copied verbatim.
+ */
+static void
+dequoteIdentifier(const char *ident, char *out, size_t outsize)
+{
+	if (ident == NULL || outsize == 0)
+	{
+		if (outsize > 0)
+		{
+			out[0] = '\0';
+		}
+		return;
+	}
+
+	size_t len = strlen(ident);
+
+	if (len >= 2 && ident[0] == '"' && ident[len - 1] == '"')
+	{
+		size_t j = 0;
+
+		/* copy the content between the surrounding quotes, un-doubling "" */
+		for (size_t i = 1; i + 1 < len && j + 1 < outsize; i++)
+		{
+			if (ident[i] == '"' && i + 2 < len && ident[i + 1] == '"')
+			{
+				out[j++] = '"';
+				i++;    /* skip the second quote of the pair */
+			}
+			else
+			{
+				out[j++] = ident[i];
+			}
+		}
+
+		out[j] = '\0';
+	}
+	else
+	{
+		strlcpy(out, ident, outsize);
+	}
+}
+
+
+/*
  * parseMessage parses a JSON message as emitted by the logical decoding output
  * plugin (either test_decoding or wal2json) into our own internal
  * representation, that can be later output as SQL text.
@@ -1510,6 +1559,38 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 				}
 			}
 
+			/*
+			 * Skip DML/TRUNCATE destined for tables that are filtered out, so
+			 * we never render PREPARE/EXECUTE SQL for changes that apply would
+			 * only discard. Detection here mirrors the apply-time check; the
+			 * apply-time skip stays as defense-in-depth.
+			 */
+
+			/*
+			 * Table names on the statement are SQL-escaped (wal2json quotes
+			 * them via pgsql_escape_identifier), but the filter lists hold bare
+			 * identifiers. Dequote before comparing so the check matches the
+			 * apply-time behavior (which unquotes when parsing PREPARE text).
+			 */
+			if (stmtNspname != NULL)
+			{
+				char nsp[PG_NAMEDATALEN] = { 0 };
+				char rel[PG_NAMEDATALEN] = { 0 };
+
+				dequoteIdentifier(stmtNspname, nsp, sizeof(nsp));
+				dequoteIdentifier(stmtRelname, rel, sizeof(rel));
+
+				if (shouldFilterOutTable(nsp, rel, privateContext->filters))
+				{
+					log_trace("Skipping %c on filtered-out table %s.%s",
+							  metadata->action, nsp, rel);
+					free(stmt);
+					privateContext->stmt = NULL;
+					break;
+				}
+			}
+
+			/* skip DML targeting materialized views */
 			if (stmtNspname != NULL &&
 				lookupMatViewCache(privateContext->matViewCache,
 								   stmtNspname, stmtRelname))

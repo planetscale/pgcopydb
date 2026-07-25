@@ -1264,6 +1264,24 @@ stream_start_in_mode(LogicalStreamMode mode)
 	}
 
 	/*
+	 * Open the source catalog and load setup information including filters, so
+	 * the transform step (prefetch) can skip changes for filtered-out tables
+	 * instead of materializing SQL that apply would only discard. Mirrors the
+	 * catchup path; followDB manages the source catalog from here on.
+	 */
+	if (!catalog_open_from_specs(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (!catalog_register_setup_from_specs(&copySpecs))
+	{
+		/* errors have already been logged */
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/*
 	 * Refrain from logging SQL statements in the apply module, because they
 	 * contain user data. That said, when --trace has been used, bypass that
 	 * privacy feature.
