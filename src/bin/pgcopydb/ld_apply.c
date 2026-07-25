@@ -647,6 +647,9 @@ stream_apply_sql(StreamApplyContext *context,
 {
 	PGSQL *applyPgConn = &(context->applyPgConn);
 
+	/* bytes this line hands to libpq; branches that send nothing zero it */
+	uint64_t sentBytes = strlen(sql);
+
 	switch (metadata->action)
 	{
 		case STREAM_ACTION_SWITCH:
@@ -660,6 +663,7 @@ stream_apply_sql(StreamApplyContext *context,
 			 * .sql file to apply.
 			 */
 			context->switchLSN = metadata->lsn;
+			sentBytes = 0;
 
 			break;
 		}
@@ -1196,6 +1200,8 @@ stream_apply_sql(StreamApplyContext *context,
 				return true;
 			}
 
+			sentBytes = 0;
+
 			/* Only prepare if we haven't already */
 			if (stmt != NULL && !stmt->prepared)
 			{
@@ -1210,6 +1216,7 @@ stream_apply_sql(StreamApplyContext *context,
 				}
 
 				stmt->prepared = true;
+				sentBytes = strlen(metadata->stmt);
 			}
 
 			break;
@@ -1343,7 +1350,10 @@ stream_apply_sql(StreamApplyContext *context,
 	 * pipeline sync only fetches pending results, the explicit
 	 * BEGIN/COMMIT transaction is unaffected.
 	 */
-	context->pipelineBytes += strlen(sql) + PIPELINE_STMT_OVERHEAD;
+	if (sentBytes > 0)
+	{
+		context->pipelineBytes += sentBytes + PIPELINE_STMT_OVERHEAD;
+	}
 
 	if (context->pipelineBytes >= PIPELINE_BYTES_SYNC_THRESHOLD)
 	{
