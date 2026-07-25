@@ -418,6 +418,8 @@ stream_replay_line(void *ctx, const char *line, bool *stop)
 							  "error for details");
 					return false;
 				}
+
+				context->pipelineBytes = 0;
 			}
 			break;
 		}
@@ -482,6 +484,8 @@ stream_replay_line(void *ctx, const char *line, bool *stop)
 					  "details");
 			return false;
 		}
+
+		context->pipelineBytes = 0;
 	}
 
 	return true;

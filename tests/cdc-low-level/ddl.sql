@@ -37,4 +37,7 @@ EXECUTE FUNCTION notify_on_insert();
 -- Lets enable the trigger for the replica mode
 ALTER TABLE metrics ENABLE REPLICA TRIGGER insert_notice_trigger;
 
+-- bounded pipeline sync test table; keep trigger-free (no NOTICE traffic)
+create table bounded_sync(id int, payload text);
+
 commit;

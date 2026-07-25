@@ -32,14 +32,14 @@
 #include "summary.h"
 
 /*
- * libpq's output buffer uses a signed int for its size, so it can only grow
- * to ~1 GB before the doubling arithmetic overflows.  When the CDC apply
- * pipelines many EXECUTE statements with large parameter values (e.g. rows
- * containing 300 MB email bodies), the accumulated data can exceed that
- * limit.  We force a pipeline sync at transaction boundaries once the
- * estimated parameter data reaches this threshold.
+ * libpq memmoves its whole outstanding buffer contents on every partial send
+ * and read, making apply quadratic in the pipeline backlog size.  Sync the
+ * pipeline every time this many bytes were sent, mid-transaction included.
  */
-#define PIPELINE_BYTES_SYNC_THRESHOLD (512ULL * 1024 * 1024)
+#define PIPELINE_BYTES_SYNC_THRESHOLD (1024 * 1024)
+
+/* per-statement allowance for protocol framing and result traffic */
+#define PIPELINE_STMT_OVERHEAD 64
 
 GUC applySettingsSync[] = {
 	COMMON_GUC_SETTINGS,
@@ -583,14 +583,9 @@ stream_apply_file(StreamApplyContext *context)
 
 		/*
 		 * Sync the pipeline at transaction boundaries (COMMIT or
-		 * KEEPALIVE) when either the 1-second timer has elapsed or
-		 * when accumulated parameter data approaches libpq's output
-		 * buffer limit.
-		 *
-		 * libpq's output buffer size is tracked with a signed int,
-		 * so the buffer can grow to ~1 GB before the doubling logic
-		 * overflows.  We sync well before that at 512 MB to leave
-		 * headroom for wire-protocol framing and PREPARE overhead.
+		 * KEEPALIVE) when the 1-second timer has elapsed, bounding
+		 * replay latency.  The byte-based sync that bounds the
+		 * pipeline backlog size lives in stream_apply_sql.
 		 */
 		if (metadata->action == STREAM_ACTION_COMMIT ||
 			metadata->action == STREAM_ACTION_KEEPALIVE)
@@ -598,10 +593,7 @@ stream_apply_file(StreamApplyContext *context)
 			bool timeToSync =
 				1 < (time(NULL) - context->applyPgConn.pipelineSyncTime);
 
-			bool bufferNearFull =
-				context->pipelineBytes >= PIPELINE_BYTES_SYNC_THRESHOLD;
-
-			if (timeToSync || bufferNearFull)
+			if (timeToSync)
 			{
 				/* fetch results until done */
 				if (!pgsql_sync_pipeline(&(context->applyPgConn)))
@@ -655,6 +647,9 @@ stream_apply_sql(StreamApplyContext *context,
 {
 	PGSQL *applyPgConn = &(context->applyPgConn);
 
+	/* bytes this line hands to libpq; branches that send nothing zero it */
+	uint64_t sentBytes = strlen(sql);
+
 	switch (metadata->action)
 	{
 		case STREAM_ACTION_SWITCH:
@@ -668,6 +663,7 @@ stream_apply_sql(StreamApplyContext *context,
 			 * .sql file to apply.
 			 */
 			context->switchLSN = metadata->lsn;
+			sentBytes = 0;
 
 			break;
 		}
@@ -1204,6 +1200,8 @@ stream_apply_sql(StreamApplyContext *context,
 				return true;
 			}
 
+			sentBytes = 0;
+
 			/* Only prepare if we haven't already */
 			if (stmt != NULL && !stmt->prepared)
 			{
@@ -1218,6 +1216,7 @@ stream_apply_sql(StreamApplyContext *context,
 				}
 
 				stmt->prepared = true;
+				sentBytes = strlen(metadata->stmt);
 			}
 
 			break;
@@ -1294,40 +1293,6 @@ stream_apply_sql(StreamApplyContext *context,
 					/* errors have already been logged */
 					return false;
 				}
-
-				/*
-				 * Track accumulated parameter bytes in the pipeline.
-				 * libpq output buffer uses int (~1 GB effective max
-				 * due to doubling), force sync before overflow.
-				 */
-				for (int j = 0; j < count; j++)
-				{
-					if (paramValues[j] != NULL)
-					{
-						context->pipelineBytes += strlen(paramValues[j]);
-					}
-				}
-
-				/*
-				 * When a single transaction contains many large rows
-				 * (e.g. 330 MB email bodies), the pipeline buffer can
-				 * exceed libpq's ~1 GB limit before reaching COMMIT.
-				 * Sync mid-transaction to drain the buffer.  This is
-				 * safe: we use explicit BEGIN/COMMIT, so a pipeline
-				 * sync only flushes pending results without affecting
-				 * the transaction.
-				 */
-				if (context->pipelineBytes >= PIPELINE_BYTES_SYNC_THRESHOLD)
-				{
-					if (!pgsql_sync_pipeline(applyPgConn))
-					{
-						log_error("Failed to sync the pipeline, "
-								  "see previous error for details");
-						return false;
-					}
-
-					context->pipelineBytes = 0;
-				}
 			}
 
 
@@ -1377,6 +1342,29 @@ stream_apply_sql(StreamApplyContext *context,
 
 			return false;
 		}
+	}
+
+	/*
+	 * Sync the pipeline as soon as the data sent since the last sync
+	 * exceeds the threshold, even in the middle of a transaction: a
+	 * pipeline sync only fetches pending results, the explicit
+	 * BEGIN/COMMIT transaction is unaffected.
+	 */
+	if (sentBytes > 0)
+	{
+		context->pipelineBytes += sentBytes + PIPELINE_STMT_OVERHEAD;
+	}
+
+	if (context->pipelineBytes >= PIPELINE_BYTES_SYNC_THRESHOLD)
+	{
+		if (!pgsql_sync_pipeline(applyPgConn))
+		{
+			log_error("Failed to sync the pipeline, "
+					  "see previous error for details");
+			return false;
+		}
+
+		context->pipelineBytes = 0;
 	}
 
 	return true;
