@@ -129,5 +129,34 @@ pgcopydb stream replay --resume --endpos "${lsn}"
 psql -At -d ${PGCOPYDB_TARGET_PGURI} -c "select pg_replication_origin_advance('pgcopydb', '0/0');"
 pgcopydb stream apply /usr/src/pgcopydb/pipeline-deadlock.sql
 
+# bounded pipeline sync test: a single multi-MB transaction must trigger
+# byte-based pipeline syncs before its COMMIT, bounding libpq's buffers
+BOUNDED=/tmp/bounded-sync.sql
+
+awk 'BEGIN {
+  printf "BEGIN; -- {\"xid\":99000001,\"lsn\":\"E0/10000000\",\"timestamp\":\"2026-07-25 10:00:00.000000+0000\",\"commit_lsn\":\"E0/20000000\"}\n";
+  for (i = 1; i <= 25000; i++) {
+    printf "PREPARE ab12cd34 AS INSERT INTO \"public\".\"bounded_sync\" (\"id\", \"payload\") overriding system value VALUES ($1, $2);\n";
+    printf "EXECUTE ab12cd34[\"%d\",\"payload-%d-0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz\"];\n", i, i;
+  }
+  printf "COMMIT; -- {\"xid\":99000001,\"lsn\":\"E0/20000000\",\"timestamp\":\"2026-07-25 10:00:00.000000+0000\"}\n";
+  printf "-- SWITCH WAL {\"lsn\":\"E0/21000000\"}\n";
+}' > ${BOUNDED}
+
+psql -At -d ${PGCOPYDB_TARGET_PGURI} -c "select pg_replication_origin_advance('pgcopydb', '0/0');"
+
+pgcopydb stream apply --trace ${BOUNDED} > /tmp/bounded-sync.log 2>&1 || \
+    { tail -50 /tmp/bounded-sync.log; exit 1; }
+
+syncs=$(grep -c "Start pipeline sync" /tmp/bounded-sync.log || true)
+rows=$(psql -At -d ${PGCOPYDB_TARGET_PGURI} -c "select count(*) from bounded_sync")
+
+echo "bounded sync test: ${syncs} pipeline syncs, ${rows} rows applied"
+
+test "${rows}" -eq 25000
+
+# unpatched pgcopydb only syncs at COMMIT/EOF, which fails this assertion
+test "${syncs}" -ge 5
+
 # cleanup
 pgcopydb stream cleanup --verbose
