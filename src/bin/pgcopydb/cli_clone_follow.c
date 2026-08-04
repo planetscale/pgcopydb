@@ -646,26 +646,10 @@ cli_follow(int argc, char **argv)
 	}
 
 	/*
-	 * The source snapshot connection is only needed for the one-time catalog
-	 * read just above. The follow phase itself streams from the replication
-	 * slot, and the database setup and sequence-reset steps each open their
-	 * own connection (they call copydb_copy_snapshot, which copies the
-	 * snapshot metadata into a fresh connection). Nothing uses this connection
-	 * again.
-	 *
-	 * Release it now instead of holding it until the process exits. Otherwise
-	 * a follow-only run (e.g. `follow --resume`, where the catalog read is a
-	 * cache hit and this connection is never even used) leaves an
-	 * idle-in-transaction connection open on the source for the entire,
-	 * potentially days-long, follow run. This mirrors clone --follow, which
-	 * already closes the snapshot once the base copy is done.
-	 *
-	 * Gate on the live connection, not sourceSnapshot.state: when the catalog
-	 * read did run it commits and finishes this connection itself (see
-	 * pgsql_commit in copydb_fetch_schema_and_prepare_specs) but leaves state
-	 * as SET, so state is unreliable here. A non-NULL connection means the
-	 * fetch left it open (the cache-hit / not-consistent cases) and it is ours
-	 * to close.
+	 * The snapshot connection is only needed for the catalog read above;
+	 * nothing in the follow phase uses it. Close it now so a follow-only run
+	 * doesn't hold it idle-in-transaction for the whole run. Gate on the live
+	 * connection, not sourceSnapshot.state, which the catalog read leaves stale.
 	 */
 	if (copySpecs.sourceSnapshot.pgsql.connection != NULL)
 	{
