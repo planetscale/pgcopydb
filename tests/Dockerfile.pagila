@@ -44,8 +44,11 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/
-# pinned: pagila v4.0.0 requires PG18 + pgvector; v3.1.0 loads on PG16/17/18
-RUN git clone --depth 1 --branch pagila-v3.1.0 https://github.com/devrimgunduz/pagila.git
+# pinned to pagila v3.1.0 @ fef9675 (immutable SHA; v4 needs PG18 + pgvector)
+RUN git init -q pagila \
+  && git -C pagila remote add origin https://github.com/devrimgunduz/pagila.git \
+  && git -C pagila fetch -q --depth 1 origin fef9675714cfba1756df4719b5e36075a7ddf90e \
+  && git -C pagila checkout -q FETCH_HEAD
 
 #RUN adduser --disabled-password --gecos '' --home /var/lib/postgres docker
 #RUN adduser docker sudo
