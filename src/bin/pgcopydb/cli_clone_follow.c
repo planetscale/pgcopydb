@@ -645,6 +645,21 @@ cli_follow(int argc, char **argv)
 		exit(EXIT_CODE_SOURCE);
 	}
 
+	/*
+	 * The snapshot connection is only needed for the catalog read above;
+	 * nothing in the follow phase uses it. Close it now so a follow-only run
+	 * doesn't hold it idle-in-transaction for the whole run. Gate on the live
+	 * connection, not sourceSnapshot.state, which the catalog read leaves stale.
+	 */
+	if (copySpecs.sourceSnapshot.pgsql.connection != NULL)
+	{
+		if (!copydb_close_snapshot(&copySpecs))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_SOURCE);
+		}
+	}
+
 	if (!follow_main_loop(&copySpecs, &specs))
 	{
 		/* errors have already been logged */
