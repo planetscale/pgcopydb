@@ -543,8 +543,10 @@ pg_vacuumdb_analyze_only(PostgresPaths *pgPaths, ConnStrings *connStrings, int j
 
 	args[argsIndex++] = (char *) pgPaths->vacuumdb;
 	args[argsIndex++] = "--analyze-only";
+	IntString jobsString = intToString(jobs);
+
 	args[argsIndex++] = "--jobs";
-	args[argsIndex++] = intToString(jobs).strValue;
+	args[argsIndex++] = jobsString.strValue;
 	args[argsIndex++] = "--dbname";
 	args[argsIndex++] = (char *) connStrings->safeSourcePGURI.pguri;
 
@@ -627,8 +629,10 @@ pg_vacuumdb_analyze_only_target(PostgresPaths *pgPaths,
 
 	args[argsIndex++] = (char *) pgPaths->vacuumdb;
 	args[argsIndex++] = "--analyze-only";
+	IntString jobsString = intToString(jobs);
+
 	args[argsIndex++] = "--jobs";
-	args[argsIndex++] = intToString(jobs).strValue;
+	args[argsIndex++] = jobsString.strValue;
 	args[argsIndex++] = "--dbname";
 	args[argsIndex++] = (char *) connStrings->safeTargetPGURI.pguri;
 
@@ -1020,6 +1024,8 @@ pg_restore_db(PostgresPaths *pgPaths,
 	args[argsIndex++] = "--section";
 	args[argsIndex++] = (char *) sectionOption;
 
+	IntString jobsString = intToString(options.jobs);
+
 	if (options.jobs == 1)
 	{
 		args[argsIndex++] = "--single-transaction";
@@ -1027,7 +1033,7 @@ pg_restore_db(PostgresPaths *pgPaths,
 	else
 	{
 		args[argsIndex++] = "--jobs";
-		args[argsIndex++] = intToString(options.jobs).strValue;
+		args[argsIndex++] = jobsString.strValue;
 	}
 
 	if (options.dropIfExists)
