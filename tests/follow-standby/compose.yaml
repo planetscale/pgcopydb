@@ -35,6 +35,7 @@ services:
       -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
       -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
       -c wal_level=logical
+      -c output_plugin_libraries=pgoutput,test_decoding,wal2json
       -c hot_standby=on
       -c max_wal_senders=10
       -c max_replication_slots=10
@@ -55,7 +56,7 @@ services:
       done
       echo "Backup done, starting replica..."
       chmod 0700 "$$PGDATA"
-      postgres -c ssl=on -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key -c hot_standby_feedback=on -c wal_level=logical -c max_replication_slots=10
+      postgres -c ssl=on -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key -c hot_standby_feedback=on -c wal_level=logical -c output_plugin_libraries=pgoutput,test_decoding,wal2json -c max_replication_slots=10
      '
     healthcheck:
       test: 'pg_isready -U postgres --dbname=pagila'

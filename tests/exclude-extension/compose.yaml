@@ -11,6 +11,7 @@ services:
       POSTGRES_HOST_AUTH_METHOD: trust
     command: >
       -c wal_level=logical
+      -c output_plugin_libraries=pgoutput,test_decoding,wal2json
       -c max_wal_senders=10
       -c max_replication_slots=10
 
