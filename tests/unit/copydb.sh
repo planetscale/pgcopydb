@@ -48,7 +48,8 @@ do
     e=./expected/${t}.out
     psql -d "${PGCOPYDB_TARGET_PGURI}" ${pgopts} --file ./sql/$t.sql &> $r
     test -f $e || cat $r
-    diff $e $r || exit 1
+    # psql 18.6 widens expanded output to the record header width
+    diff -w $e $r || exit 1
 done
 
 
