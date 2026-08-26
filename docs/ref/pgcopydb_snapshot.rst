@@ -54,8 +54,14 @@ The following options are available to ``pgcopydb snapshot``:
   mostly historical in pgcopydb, it should not make a user visible
   difference whether you use the default test_decoding or wal2json.
 
+  It is also possible to use `pgoutput`__, which is built into Postgres core
+  since version 10. Use pgoutput when you cannot install an extension on the
+  source server. See :ref:`pgcopydb_follow` for the ``--publication`` option
+  that goes with it.
+
   __ https://www.postgresql.org/docs/current/test-decoding.html
   __ https://github.com/eulerto/wal2json/
+  __ https://www.postgresql.org/docs/current/protocol-logical-replication.html
 
 --wal2json-numeric-as-string
 

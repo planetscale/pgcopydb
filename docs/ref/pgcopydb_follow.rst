@@ -465,8 +465,59 @@ The following options are available to ``pgcopydb follow``:
   mostly historical in pgcopydb, it should not make a user visible
   difference whether you use the default test_decoding or wal2json.
 
+  It is also possible to use `pgoutput`__, which is built into Postgres core
+  since version 10. Use pgoutput when you cannot install an extension on the
+  source server. pgoutput sends a compact binary protocol, so it uses less
+  network bandwidth and less CPU on the source server than the other two
+  plugins.
+
+  pgoutput only sends the changes for the tables of a publication. See the
+  ``--publication`` option for how pgcopydb manages that publication.
+
   __ https://www.postgresql.org/docs/current/test-decoding.html
   __ https://github.com/eulerto/wal2json/
+  __ https://www.postgresql.org/docs/current/protocol-logical-replication.html
+
+--publication
+
+  Name of the publication to use with the ``--plugin pgoutput`` option. This
+  option does nothing with the other output plugins.
+
+  When you pass ``--publication``, the publication must already exist on the
+  source database. pgcopydb never changes it and never drops it.
+
+  When you omit ``--publication``, pgcopydb creates a publication named after
+  the replication slot, and drops it again during ``pgcopydb stream cleanup``.
+  The publication lists the tables that the ``--filters`` option selects, so
+  the source server does the filtering.
+
+  The publication is created together with the replication slot. In a
+  multi-step migration that is the ``pgcopydb snapshot`` step, not the
+  ``pgcopydb clone`` step, so pass ``--filters`` to ``pgcopydb snapshot`` as
+  well::
+
+    $ pgcopydb snapshot --follow --plugin pgoutput --filters filters.ini
+    $ pgcopydb stream setup
+    $ pgcopydb clone --filters filters.ini
+
+  Without ``--filters`` on the snapshot step the publication lists every
+  table. pgcopydb still filters the changes before it applies them, so the
+  target stays correct, but the source server decodes and sends rows that are
+  then discarded. ``pgcopydb clone --follow`` takes the filters in a single
+  command and does not need this.
+
+  Two limits apply to the publication that pgcopydb creates:
+
+    - The table list is read once, when the replication slot is created. A
+      table that you create on the source during the migration is not in the
+      publication, so its changes are not replicated. Add such a table to the
+      publication yourself, or use ``--publication`` and manage the
+      publication yourself.
+
+    - ``CREATE PUBLICATION`` is a DDL statement, so it needs a read-write
+      source server and ownership of every listed table. When the source is a
+      standby server, create the publication on the primary and then pass
+      ``--publication``.
 
 --wal2json-numeric-as-string
 

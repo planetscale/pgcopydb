@@ -32,7 +32,9 @@ CommandLine snapshot_command =
 		"  --source                      Postgres URI to the source database\n"
 		"  --dir                         Work directory to use\n"
 		"  --follow                      Implement logical decoding to replay changes\n"
-		"  --plugin                      Output plugin to use (test_decoding, wal2json)\n"
+		"  --plugin                      Output plugin to use (test_decoding, wal2json, pgoutput)\n"
+		"  --publication                 Publication to use with the pgoutput plugin\n"
+		"  --filters <filename>          Use the filters defined in <filename>\n"
 		"  --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin\n"
 		"  --slot-name                   Use this Postgres replication slot name\n",
 		cli_create_snapshot_getopts,
@@ -53,6 +55,8 @@ cli_create_snapshot_getopts(int argc, char **argv)
 		{ "follow", no_argument, NULL, 'f' },
 		{ "plugin", required_argument, NULL, 'p' },
 		{ "wal2json-numeric-as-string", no_argument, NULL, 'w' },
+		{ "publication", required_argument, NULL, 262 },
+		{ "filters", required_argument, NULL, 'F' },
 		{ "slot-name", required_argument, NULL, 's' },
 		{ "version", no_argument, NULL, 'V' },
 		{ "verbose", no_argument, NULL, 'v' },
@@ -73,7 +77,7 @@ cli_create_snapshot_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	while ((c = getopt_long(argc, argv, "S:D:fp:ws:Vvdzqh",
+	while ((c = getopt_long(argc, argv, "S:D:fp:wF:s:Vvdzqh",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -124,6 +128,29 @@ cli_create_snapshot_getopts(int argc, char **argv)
 			{
 				options.slot.wal2jsonNumericAsString = true;
 				log_trace("--wal2json-numeric-as-string");
+				break;
+			}
+
+			case 262:
+			{
+				strlcpy(options.slot.publicationName, optarg,
+						sizeof(options.slot.publicationName));
+
+				log_trace("--publication %s", options.slot.publicationName);
+				break;
+			}
+
+			case 'F':
+			{
+				strlcpy(options.filterFileName, optarg, MAXPGPATH);
+				log_trace("--filters \"%s\"", options.filterFileName);
+
+				if (!file_exists(options.filterFileName))
+				{
+					log_error("Filters file \"%s\" does not exists",
+							  options.filterFileName);
+					++errors;
+				}
 				break;
 			}
 
@@ -289,6 +316,21 @@ cli_create_snapshot(int argc, char **argv)
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	/*
+	 * The pgoutput publication is created here, so the filters have to be
+	 * known now. Without this the publication would list every table and the
+	 * later --filters of the clone step would arrive too late.
+	 */
+	if (!IS_EMPTY_STRING_BUFFER(createSNoptions.filterFileName))
+	{
+		if (!parse_filters(createSNoptions.filterFileName, &(copySpecs.filters)))
+		{
+			log_error("Failed to parse filters in file \"%s\"",
+					  createSNoptions.filterFileName);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
 	}
 
 	/*

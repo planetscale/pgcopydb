@@ -558,6 +558,20 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 		return false;
 	}
 
+	/*
+	 * The pgoutput plugin only sends the tables of a publication. Create the
+	 * publication before the slot, so that the slot starts to decode with the
+	 * publication already in place.
+	 */
+	if (slot->plugin == STREAM_PLUGIN_PGOUTPUT)
+	{
+		if (!snapshot_prepare_publication(copySpecs, slot))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+	}
+
 	if (!pgsql_create_logical_replication_slot(stream, slot))
 	{
 		log_error("Failed to create a logical replication slot "
@@ -625,6 +639,119 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 
 
 /*
+ * snapshot_prepare_publication makes sure that a publication exists for the
+ * pgoutput plugin.
+ *
+ * When the user passed --publication, the named publication must already
+ * exist and pgcopydb never changes or drops it. Otherwise pgcopydb creates a
+ * publication named after the replication slot, applies the table filters to
+ * it, and drops it again in "pgcopydb stream cleanup".
+ */
+bool
+snapshot_prepare_publication(CopyDataSpec *copySpecs, ReplicationSlot *slot)
+{
+	PGSQL src = { 0 };
+
+	if (IS_EMPTY_STRING_BUFFER(slot->publicationName))
+	{
+		log_error("BUG: the pgoutput plugin requires a publication name");
+		return false;
+	}
+
+	if (!pgsql_init(&src, copySpecs->connStrings.source_pguri,
+					PGSQL_CONN_SOURCE))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!slot->publicationAutoManaged)
+	{
+		bool exists = false;
+
+		if (!pgsql_publication_exists(&src, slot->publicationName, &exists))
+		{
+			/* errors have already been logged */
+			pgsql_finish(&src);
+			return false;
+		}
+
+		if (!exists)
+		{
+			log_error("Publication \"%s\" does not exist on the source database",
+					  slot->publicationName);
+			log_info("Create the publication first, or omit --publication to "
+					 "let pgcopydb create and drop one");
+			pgsql_finish(&src);
+			return false;
+		}
+
+		log_info("Using the existing publication \"%s\"",
+				 slot->publicationName);
+
+		pgsql_finish(&src);
+		return true;
+	}
+
+	/*
+	 * CREATE PUBLICATION is a DDL statement, so it cannot run on a read-only
+	 * standby. Ask the user for a publication that already exists on the
+	 * primary instead of failing later with a less clear error.
+	 */
+	bool sourceIsReadOnly = false;
+
+	if (!pgsql_is_in_recovery(&src, &sourceIsReadOnly))
+	{
+		log_error("Failed to check if source is in recovery");
+		pgsql_finish(&src);
+		return false;
+	}
+
+	if (sourceIsReadOnly)
+	{
+		log_error("Failed to create publication \"%s\": "
+				  "the source database is a read-only standby",
+				  slot->publicationName);
+		log_info("Create the publication on the primary, then pass "
+				 "--publication to use it");
+		pgsql_finish(&src);
+		return false;
+	}
+
+	bool exists = false;
+
+	if (!pgsql_publication_exists(&src, slot->publicationName, &exists))
+	{
+		/* errors have already been logged */
+		pgsql_finish(&src);
+		return false;
+	}
+
+	/* a --resume run finds the publication that a previous run created */
+	if (exists)
+	{
+		log_info("Reusing the publication \"%s\" created by pgcopydb",
+				 slot->publicationName);
+		pgsql_finish(&src);
+		return true;
+	}
+
+	if (!pgsql_create_publication(&src, slot->publicationName,
+								  &(copySpecs->filters)))
+	{
+		log_error("Failed to create publication \"%s\"",
+				  slot->publicationName);
+		pgsql_finish(&src);
+		return false;
+	}
+
+	pgsql_finish(&src);
+
+	return true;
+}
+
+
+/*
  * snapshot_write_slot writes a replication slot information to file.
  */
 bool
@@ -637,6 +764,8 @@ snapshot_write_slot(const char *filename, ReplicationSlot *slot)
 	appendPQExpBuffer(contents, "%s\n", slot->snapshot);
 	appendPQExpBuffer(contents, "%s\n", OutputPluginToString(slot->plugin));
 	appendPQExpBuffer(contents, "%s\n", boolToString(slot->wal2jsonNumericAsString));
+	appendPQExpBuffer(contents, "%s\n", slot->publicationName);
+	appendPQExpBuffer(contents, "%s\n", boolToString(slot->publicationAutoManaged));
 
 	if (PQExpBufferBroken(contents))
 	{
@@ -684,7 +813,11 @@ snapshot_read_slot(const char *filename, ReplicationSlot *slot)
 		return false;
 	}
 
-	if (lbuf.count != 5)
+	/*
+	 * A slot file written before pgoutput support has 5 lines. A slot file
+	 * with the publication information has 7 lines.
+	 */
+	if (lbuf.count != 5 && lbuf.count != 7)
 	{
 		log_error("Failed to parse replication slot file \"%s\"", filename);
 		return false;
@@ -750,6 +883,25 @@ snapshot_read_slot(const char *filename, ReplicationSlot *slot)
 				  filename);
 	}
 
+	/* 6. publication name, 7. publication is managed by pgcopydb */
+	if (lbuf.count == 7)
+	{
+		length = strlcpy(slot->publicationName, lbuf.lines[5],
+						 sizeof(slot->publicationName));
+
+		if (length >= sizeof(slot->publicationName))
+		{
+			log_error("Failed to read publication name \"%s\" from file \"%s\", "
+					  "length is %lld bytes which exceeds maximum %lld bytes",
+					  lbuf.lines[5],
+					  filename,
+					  (long long) strlen(lbuf.lines[5]),
+					  (long long) sizeof(slot->publicationName));
+			return false;
+		}
+
+		parse_bool(lbuf.lines[6], &(slot->publicationAutoManaged));
+	}
 
 	log_notice("Read replication slot file \"%s\" with snapshot \"%s\", "
 			   "slot \"%s\", lsn %X/%X, and plugin \"%s\"",

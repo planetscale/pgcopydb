@@ -133,6 +133,24 @@ stream_init_specs(StreamSpecs *specs,
 			break;
 		}
 
+		case STREAM_PLUGIN_PGOUTPUT:
+		{
+			KeyVal options = {
+				.count = 2,
+				.keywords = {
+					"proto_version",
+					"publication_names"
+				},
+				.values = {
+					"1",
+					specs->slot.publicationName
+				}
+			};
+
+			specs->pluginOptions = options;
+			break;
+		}
+
 		default:
 		{
 			log_error("Unknown logical decoding output plugin \"%s\"",
@@ -855,6 +873,35 @@ streamWrite(LogicalStreamContext *context)
 
 		/* update internal transaction counters */
 		(void) updateStreamCounters(privateContext, metadata);
+
+		/*
+		 * A single pgoutput TRUNCATE message can target several relations at
+		 * once, while our internal representation holds one relation per
+		 * statement. Write one more JSON message for each extra relation.
+		 */
+		if (context->plugin == STREAM_PLUGIN_PGOUTPUT &&
+			metadata->action == STREAM_ACTION_TRUNCATE &&
+			privateContext->pgoutputMsg.ntruncate > 1)
+		{
+			for (int i = 1; i < privateContext->pgoutputMsg.ntruncate; i++)
+			{
+				metadata->jsonBuffer = pgoutputTruncateJSON(privateContext, i);
+
+				if (metadata->jsonBuffer == NULL)
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
+				if (!stream_write_json(context, previous))
+				{
+					/* errors have already been logged */
+					return false;
+				}
+
+				(void) updateStreamCounters(privateContext, metadata);
+			}
+		}
 	}
 
 	if (metadata->xid > 0)
@@ -1908,6 +1955,11 @@ parseMessageActionAndXid(LogicalStreamContext *context)
 			return parseWal2jsonMessageActionAndXid(context);
 		}
 
+		case STREAM_PLUGIN_PGOUTPUT:
+		{
+			return parsePgoutputMessageActionAndXid(context);
+		}
+
 		default:
 		{
 			log_error("BUG in parseMessageActionAndXid: unknown plugin %d",
@@ -1937,6 +1989,11 @@ prepareMessageJSONbuffer(LogicalStreamContext *context)
 		case STREAM_PLUGIN_WAL2JSON:
 		{
 			return prepareWal2jsonMessage(context);
+		}
+
+		case STREAM_PLUGIN_PGOUTPUT:
+		{
+			return preparePgoutputMessage(context);
 		}
 
 		default:
@@ -2545,6 +2602,27 @@ stream_cleanup_databases(CopyDataSpec *copySpecs, char *slotName, char *origin)
 	}
 	else
 	{
+		/*
+		 * Drop the publication when pgcopydb created it for the pgoutput
+		 * plugin. A publication named with --publication belongs to the user
+		 * and is left in place.
+		 */
+		ReplicationSlot slot = { 0 };
+
+		if (file_exists(copySpecs->cfPaths.cdc.slotfile) &&
+			snapshot_read_slot(copySpecs->cfPaths.cdc.slotfile, &slot) &&
+			slot.publicationAutoManaged &&
+			!IS_EMPTY_STRING_BUFFER(slot.publicationName))
+		{
+			if (!pgsql_drop_publication(&src, slot.publicationName))
+			{
+				log_error("Failed to drop publication \"%s\"",
+						  slot.publicationName);
+				pgsql_finish(&src);
+				return false;
+			}
+		}
+
 		log_info("Removing schema pgcopydb and its objects");
 
 		if (!pgsql_execute(&src, "drop schema if exists pgcopydb cascade"))

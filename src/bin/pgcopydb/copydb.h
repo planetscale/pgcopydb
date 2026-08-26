@@ -339,6 +339,8 @@ bool copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 											const char *logrep_pguri,
 											ReplicationSlot *slot);
 
+bool snapshot_prepare_publication(CopyDataSpec *copySpecs,
+								  ReplicationSlot *slot);
 bool snapshot_write_slot(const char *filename, ReplicationSlot *slot);
 bool snapshot_read_slot(const char *filename, ReplicationSlot *slot);
 

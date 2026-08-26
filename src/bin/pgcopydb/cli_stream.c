@@ -56,7 +56,8 @@ static CommandLine stream_setup_command =
 		"  --resume                      Allow resuming operations after a failure\n"
 		"  --not-consistent              Allow taking a new snapshot on the source database\n"
 		"  --snapshot                    Use snapshot obtained with pg_export_snapshot\n"
-		"  --plugin                      Output plugin to use (test_decoding, wal2json)\n"
+		"  --plugin                      Output plugin to use (test_decoding, wal2json, pgoutput)\n"
+		"  --publication                 Publication to use with the pgoutput plugin\n"
 		"  --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin\n"
 		"  --slot-name                   Stream changes recorded by this slot\n"
 		"  --origin                      Name of the Postgres replication origin\n",
@@ -207,6 +208,7 @@ cli_stream_getopts(int argc, char **argv)
 		{ "dir", required_argument, NULL, 'D' },
 		{ "plugin", required_argument, NULL, 'p' },
 		{ "wal2json-numeric-as-string", no_argument, NULL, 'w' },
+		{ "publication", required_argument, NULL, 262 },
 		{ "slot-name", required_argument, NULL, 's' },
 		{ "snapshot", required_argument, NULL, 'N' },
 		{ "origin", required_argument, NULL, 'o' },
@@ -294,6 +296,15 @@ cli_stream_getopts(int argc, char **argv)
 			{
 				options.slot.wal2jsonNumericAsString = true;
 				log_trace("--wal2json-numeric-as-string");
+				break;
+			}
+
+			case 262:
+			{
+				strlcpy(options.slot.publicationName, optarg,
+						sizeof(options.slot.publicationName));
+
+				log_trace("--publication %s", options.slot.publicationName);
 				break;
 			}
 
