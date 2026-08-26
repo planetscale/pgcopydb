@@ -5554,7 +5554,9 @@ pgsql_table_exists(PGSQL *pgsql,
 	const Oid paramTypes[3] = { OIDOID, TEXTOID, TEXTOID };
 	const char *paramValues[3] = { 0 };
 
-	paramValues[0] = intToString(oid).strValue;
+	IntString oidString = intToString(oid);
+
+	paramValues[0] = oidString.strValue;
 	paramValues[1] = nspname;
 	paramValues[2] = relname;
 
