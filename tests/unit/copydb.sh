@@ -48,7 +48,9 @@ do
     e=./expected/${t}.out
     psql -d "${PGCOPYDB_TARGET_PGURI}" ${pgopts} --file ./sql/$t.sql &> $r
     test -f $e || cat $r
-    diff $e $r || exit 1
+    # ignore whitespace: since 18.6 psql widens expanded output rows to the
+    # record header width, and these tests assert content, not alignment
+    diff -w $e $r || exit 1
 done
 
 
