@@ -12,6 +12,7 @@
 
 #include "copydb.h"
 #include "filtering.h"
+#include "ld_pgoutput.h"
 #include "queue_utils.h"
 #include "pgsql.h"
 #include "schema.h"
@@ -393,6 +394,11 @@ typedef struct StreamContext
 
 	/* table filtering configuration */
 	SourceFilters *filters;
+
+	/* relation cache and current message for the pgoutput binary protocol */
+	PgoutputRelationCache *pgoutputRelationCache;
+	PgoutputMessage pgoutputMsg;
+	uint32_t currentXid;        /* pgoutput sends the xid in BEGIN only */
 
 	Queue *transformQueue;
 	PGSQL *transformPGSQL;

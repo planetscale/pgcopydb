@@ -62,7 +62,8 @@
 	"  --not-consistent              Allow taking a new snapshot on the source database\n" \
 	"  --snapshot                    Use snapshot obtained with pg_export_snapshot\n" \
 	"  --follow                      Implement logical decoding to replay changes\n" \
-	"  --plugin                      Output plugin to use (test_decoding, wal2json)\n" \
+	"  --plugin                      Output plugin to use (pgoutput, test_decoding, wal2json)\n" \
+	"  --publication                 Publication to use with the pgoutput plugin\n" \
 	"  --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin\n" \
 	"  --slot-name                   Use this Postgres replication slot name\n" \
 	"  --create-slot                 Create the replication slot\n" \
@@ -107,7 +108,8 @@ CommandLine follow_command =
 		"  --resume                      Allow resuming operations after a failure\n"
 		"  --not-consistent              Allow taking a new snapshot on the source database\n"
 		"  --snapshot                    Use snapshot obtained with pg_export_snapshot\n"
-		"  --plugin                      Output plugin to use (test_decoding, wal2json)\n"
+		"  --plugin                      Output plugin to use (pgoutput, test_decoding, wal2json)\n"
+		"  --publication                 Publication to use with the pgoutput plugin\n"
 		"  --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin\n"
 		"  --slot-name                   Use this Postgres replication slot name\n"
 		"  --create-slot                 Create the replication slot\n"
