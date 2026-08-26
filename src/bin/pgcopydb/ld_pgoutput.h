@@ -83,7 +83,7 @@ struct StreamContext;
 
 bool parsePgoutputMessageActionAndXid(LogicalStreamContext *context);
 bool preparePgoutputMessage(LogicalStreamContext *context);
-char *pgoutputTruncateJSON(struct StreamContext *privateContext, int relIndex);
+char * pgoutputTruncateJSON(struct StreamContext *privateContext, int relIndex);
 void free_pgoutput_message(PgoutputMessage *msg);
 
 
