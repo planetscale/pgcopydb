@@ -312,8 +312,8 @@ cli_copydb_getenv(CopyDBOptions *options)
 
 		if (options->slot.plugin == STREAM_PLUGIN_UNKNOWN)
 		{
-			log_fatal("Unknown replication plugin \"%s\", please use either "
-					  "test_decoding (the default) or wal2json",
+			log_fatal("Unknown replication plugin \"%s\", please use one of "
+					  "pgoutput (the default), test_decoding, or wal2json",
 					  OutputPluginToString(options->slot.plugin));
 			++errors;
 		}
@@ -521,14 +521,55 @@ cli_read_previous_options(CopyDBOptions *options, CopyFilePaths *cfPaths)
 			return false;
 		}
 
+		if (!IS_EMPTY_STRING_BUFFER(options->slot.publicationName) &&
+			!streq(options->slot.publicationName, onFileSlot.publicationName))
+		{
+			log_error("Failed to ensure consistency of --publication");
+			log_error("Previous run was done with publication \"%s\" and "
+					  "current run is using --publication \"%s\"",
+					  onFileSlot.publicationName,
+					  options->slot.publicationName);
+			return false;
+		}
+
 		/* copy the onFileSlot over to our options, wholesale */
 		options->slot = onFileSlot;
 	}
 
 	if (options->slot.plugin == STREAM_PLUGIN_UNKNOWN)
 	{
-		log_fatal("Unknown replication plugin \"%s\", please use either "
-				  "test_decoding (the default) or wal2json",
+		log_fatal("Unknown replication plugin \"%s\", please use one of "
+				  "pgoutput (the default), test_decoding, or wal2json",
+				  OutputPluginToString(options->slot.plugin));
+		return false;
+	}
+
+	if (options->slot.plugin == STREAM_PLUGIN_PGOUTPUT)
+	{
+		/*
+		 * pgoutput only sends the tables of a publication. Without
+		 * --publication, pgcopydb creates one named after the replication
+		 * slot and drops it again in "pgcopydb stream cleanup".
+		 */
+		if (IS_EMPTY_STRING_BUFFER(options->slot.publicationName))
+		{
+			strlcpy(options->slot.publicationName,
+					options->slot.slotName,
+					sizeof(options->slot.publicationName));
+
+			options->slot.publicationAutoManaged = true;
+		}
+
+		log_notice("Using pgoutput with publication \"%s\" (%s)",
+				   options->slot.publicationName,
+				   options->slot.publicationAutoManaged
+				   ? "managed by pgcopydb"
+				   : "managed by the user");
+	}
+	else if (!IS_EMPTY_STRING_BUFFER(options->slot.publicationName))
+	{
+		log_fatal("Option --publication requires --plugin pgoutput, "
+				  "current plugin is \"%s\"",
 				  OutputPluginToString(options->slot.plugin));
 		return false;
 	}
@@ -659,6 +700,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "defer-validate-fks", no_argument, NULL, 259 },
 		{ "prune-threshold", required_argument, NULL, 260 },
 		{ "prune-min-age", required_argument, NULL, 261 },
+		{ "publication", required_argument, NULL, 262 },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
 	};
@@ -1197,6 +1239,15 @@ cli_copy_db_getopts(int argc, char **argv)
 				log_trace("--prune-min-age %s (%d seconds)",
 						  options.pruneMinAgePretty,
 						  options.pruneMinAgeSeconds);
+				break;
+			}
+
+			case 262:
+			{
+				strlcpy(options.slot.publicationName, optarg,
+						sizeof(options.slot.publicationName));
+
+				log_trace("--publication %s", options.slot.publicationName);
 				break;
 			}
 

@@ -21,8 +21,11 @@
 
 #include "cli_root.h"
 #include "defaults.h"
+#include "parson.h"
+
 #include "env_utils.h"
 #include "file_utils.h"
+#include "filtering.h"
 #include "log.h"
 #include "parsing_utils.h"
 #include "pgsql.h"
@@ -3817,6 +3820,10 @@ OutputPluginFromString(char *plugin)
 	{
 		return STREAM_PLUGIN_WAL2JSON;
 	}
+	else if (strcmp(plugin, "pgoutput") == 0)
+	{
+		return STREAM_PLUGIN_PGOUTPUT;
+	}
 
 	return STREAM_PLUGIN_UNKNOWN;
 }
@@ -3843,6 +3850,11 @@ OutputPluginToString(StreamOutputPlugin plugin)
 		case STREAM_PLUGIN_WAL2JSON:
 		{
 			return "wal2json";
+		}
+
+		case STREAM_PLUGIN_PGOUTPUT:
+		{
+			return "pgoutput";
 		}
 
 		default:
@@ -4506,6 +4518,7 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 		/* call the consumer function */
 		context->cur_record_lsn = cur_record_lsn;
 		context->buffer = copybuf + hdr_len;
+		context->bufferLen = r - hdr_len;
 		context->now = client->now;
 
 		/* the tracking LSN information is updated in the writeFunction */
@@ -5227,6 +5240,314 @@ pgsql_drop_replication_slot(PGSQL *pgsql, const char *slotName)
 	return pgsql_execute_with_params(pgsql, sql,
 									 1, paramTypes, paramValues,
 									 NULL, NULL);
+}
+
+
+/*
+ * pgsql_create_publication creates a publication FOR TABLE <table list> by
+ * querying the source catalogs on the live connection. System schemas and the
+ * pgcopydb internal schema are always excluded.
+ *
+ * When filters is non-NULL, the include-only and exclude entries are applied
+ * so that the publication matches the user filter. That gives server-side
+ * filtering for the pgoutput plugin.
+ *
+ * CREATE PUBLICATION ... FOR TABLE needs ownership of each listed table. It
+ * does not need superuser, unlike FOR ALL TABLES.
+ */
+
+typedef struct PublicationTableListContext
+{
+	PQExpBuffer tableList;
+	bool hasTable;
+} PublicationTableListContext;
+
+
+/*
+ * appendQuotedIdentPub appends a double-quoted SQL identifier, with internal
+ * double quotes doubled.
+ */
+static void
+appendQuotedIdentPub(PQExpBuffer buf, const char *ident)
+{
+	appendPQExpBufferChar(buf, '"');
+
+	for (const char *p = ident; *p; p++)
+	{
+		if (*p == '"')
+		{
+			appendPQExpBufferChar(buf, '"');
+		}
+
+		appendPQExpBufferChar(buf, *p);
+	}
+
+	appendPQExpBufferChar(buf, '"');
+}
+
+
+static void
+publication_table_list_parse(void *ctx, PGresult *result)
+{
+	PublicationTableListContext *context = (PublicationTableListContext *) ctx;
+	int nTuples = PQntuples(result);
+
+	for (int i = 0; i < nTuples; i++)
+	{
+		char *nspname = PQgetvalue(result, i, 0);
+		char *relname = PQgetvalue(result, i, 1);
+
+		if (context->hasTable)
+		{
+			appendPQExpBufferStr(context->tableList, ", ");
+		}
+
+		appendQuotedIdentPub(context->tableList, nspname);
+		appendPQExpBufferChar(context->tableList, '.');
+		appendQuotedIdentPub(context->tableList, relname);
+
+		context->hasTable = true;
+	}
+}
+
+
+/*
+ * appendStringLiteralPub appends a SQL string literal, with internal single
+ * quotes doubled.
+ */
+static void
+appendStringLiteralPub(PQExpBuffer buf, const char *str)
+{
+	appendPQExpBufferChar(buf, '\'');
+
+	for (const char *p = str; *p; p++)
+	{
+		if (*p == '\'')
+		{
+			appendPQExpBufferChar(buf, '\'');
+		}
+
+		appendPQExpBufferChar(buf, *p);
+	}
+
+	appendPQExpBufferChar(buf, '\'');
+}
+
+
+bool
+pgsql_create_publication(PGSQL *pgsql, const char *pubName,
+						 struct SourceFilters *filters)
+{
+	PQExpBuffer query = createPQExpBuffer();
+
+	if (query == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	/*
+	 * Only ordinary and partitioned tables can be published. Reading
+	 * pg_class/pg_namespace directly avoids the pg_tables view, which does not
+	 * report the relkind we need to filter on.
+	 */
+	appendPQExpBufferStr(query,
+						 "SELECT n.nspname, c.relname"
+						 "  FROM pg_class c"
+						 "  JOIN pg_namespace n ON n.oid = c.relnamespace"
+						 " WHERE c.relkind IN ('r', 'p')"
+						 "   AND c.relpersistence = 'p'"
+						 "   AND n.nspname NOT IN "
+						 "('pg_catalog', 'information_schema', 'pgcopydb')"
+						 "   AND n.nspname NOT LIKE 'pg_toast%'"
+						 "   AND n.nspname NOT LIKE 'pg_temp%'");
+
+	if (filters != NULL)
+	{
+		/*
+		 * For an include-only filter, restrict the list to the named schemas
+		 * and tables by OR-ing every allowed entry together.
+		 */
+		if (filters->type == SOURCE_FILTER_TYPE_INCL)
+		{
+			bool firstCond = true;
+
+			appendPQExpBufferStr(query, " AND (");
+
+			for (int i = 0; i < filters->includeOnlySchemaList.count; i++)
+			{
+				if (!firstCond)
+				{
+					appendPQExpBufferStr(query, " OR ");
+				}
+
+				appendPQExpBufferStr(query, "n.nspname = ");
+				appendStringLiteralPub(
+					query, filters->includeOnlySchemaList.array[i].nspname);
+				firstCond = false;
+			}
+
+			for (int i = 0; i < filters->includeOnlyTableList.count; i++)
+			{
+				if (!firstCond)
+				{
+					appendPQExpBufferStr(query, " OR ");
+				}
+
+				appendPQExpBufferStr(query, "(n.nspname = ");
+				appendStringLiteralPub(
+					query, filters->includeOnlyTableList.array[i].nspname);
+				appendPQExpBufferStr(query, " AND c.relname = ");
+				appendStringLiteralPub(
+					query, filters->includeOnlyTableList.array[i].relname);
+				appendPQExpBufferChar(query, ')');
+				firstCond = false;
+			}
+
+			if (firstCond)
+			{
+				/* an include-only filter with no entry includes nothing */
+				appendPQExpBufferStr(query, "false");
+			}
+
+			appendPQExpBufferChar(query, ')');
+		}
+
+		/*
+		 * For an exclude filter, strip out the named schemas and tables.
+		 */
+		if (filters->type == SOURCE_FILTER_TYPE_EXCL ||
+			filters->type == SOURCE_FILTER_TYPE_LIST_EXCL ||
+			filters->type == SOURCE_FILTER_TYPE_LIST_NOT_INCL)
+		{
+			for (int i = 0; i < filters->excludeSchemaList.count; i++)
+			{
+				appendPQExpBufferStr(query, " AND n.nspname != ");
+				appendStringLiteralPub(
+					query, filters->excludeSchemaList.array[i].nspname);
+			}
+
+			for (int i = 0; i < filters->excludeTableList.count; i++)
+			{
+				appendPQExpBufferStr(query, " AND NOT (n.nspname = ");
+				appendStringLiteralPub(
+					query, filters->excludeTableList.array[i].nspname);
+				appendPQExpBufferStr(query, " AND c.relname = ");
+				appendStringLiteralPub(
+					query, filters->excludeTableList.array[i].relname);
+				appendPQExpBufferChar(query, ')');
+			}
+		}
+	}
+
+	appendPQExpBufferStr(query, " ORDER BY n.nspname, c.relname");
+
+	PQExpBuffer tableList = createPQExpBuffer();
+
+	if (tableList == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		destroyPQExpBuffer(query);
+		return false;
+	}
+
+	PublicationTableListContext ctx = {
+		.tableList = tableList,
+		.hasTable = false
+	};
+
+	if (!pgsql_execute_with_params(pgsql, query->data, 0, NULL, NULL,
+								   &ctx, &publication_table_list_parse))
+	{
+		destroyPQExpBuffer(query);
+		destroyPQExpBuffer(tableList);
+		return false;
+	}
+
+	destroyPQExpBuffer(query);
+
+	PQExpBuffer sql = createPQExpBuffer();
+
+	if (sql == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		destroyPQExpBuffer(tableList);
+		return false;
+	}
+
+	appendPQExpBufferStr(sql, "CREATE PUBLICATION ");
+	appendQuotedIdentPub(sql, pubName);
+
+	if (ctx.hasTable)
+	{
+		appendPQExpBuffer(sql, " FOR TABLE %s", tableList->data);
+	}
+
+	destroyPQExpBuffer(tableList);
+
+	log_info("Creating publication \"%s\"", pubName);
+	log_debug("%s", sql->data);
+
+	bool result = pgsql_execute(pgsql, sql->data);
+
+	destroyPQExpBuffer(sql);
+
+	return result;
+}
+
+
+/*
+ * pgsql_drop_publication drops a publication by name.
+ */
+bool
+pgsql_drop_publication(PGSQL *pgsql, const char *pubName)
+{
+	PQExpBuffer sql = createPQExpBuffer();
+
+	if (sql == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	appendPQExpBufferStr(sql, "DROP PUBLICATION IF EXISTS ");
+	appendQuotedIdentPub(sql, pubName);
+
+	log_info("Dropping publication \"%s\"", pubName);
+
+	bool result = pgsql_execute(pgsql, sql->data);
+
+	destroyPQExpBuffer(sql);
+
+	return result;
+}
+
+
+/*
+ * pgsql_publication_exists checks that a publication with the given name
+ * exists on the source server.
+ */
+bool
+pgsql_publication_exists(PGSQL *pgsql, const char *pubName, bool *exists)
+{
+	SingleValueResultContext context = { { 0 }, PGSQL_RESULT_BOOL, false };
+
+	char *sql =
+		"SELECT true FROM pg_publication WHERE pubname = $1";
+
+	Oid paramTypes[1] = { TEXTOID };
+	const char *paramValues[1] = { pubName };
+
+	if (!pgsql_execute_with_params(pgsql, sql,
+								   1, paramTypes, paramValues,
+								   &context, &parseSingleValueResult))
+	{
+		return false;
+	}
+
+	*exists = context.parsedOk && context.boolVal;
+
+	return true;
 }
 
 

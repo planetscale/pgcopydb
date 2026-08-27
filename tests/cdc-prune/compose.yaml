@@ -11,6 +11,7 @@ services:
       POSTGRES_HOST_AUTH_METHOD: trust
     command: >
       -c wal_level=logical
+      -c output_plugin_libraries=pgoutput,test_decoding,wal2json
   target:
     image: postgres:${PGVERSION:-16}
     expose:

@@ -149,7 +149,10 @@ jobs:
           - cdc-endpos-between-transaction
           - cdc-filtering
           - cdc-wal2json
+          - cdc-pgoutput
+          - cdc-filtering-pgoutput
           - follow-wal2json
+          - follow-pgoutput
           - follow-standby
           - follow-9.6
           - follow-data-only

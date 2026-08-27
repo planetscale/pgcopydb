@@ -56,7 +56,8 @@ psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/ddl.sql
 find ${TMPDIR}
 
 # pgcopydb copy db uses the environment variables
-pgcopydb clone --follow --notice --use-copy-binary
+# pgoutput needs PG 10 or later
+pgcopydb clone --follow --plugin test_decoding --notice --use-copy-binary
 
 # cleanup
 pgcopydb stream sentinel get

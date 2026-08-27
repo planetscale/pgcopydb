@@ -57,10 +57,13 @@ SQLFILE=000000010000000000000002.sql
 expected=/tmp/expected.json
 result=/tmp/result.json
 
-JQSCRIPT='del(.lsn) | del(.nextlsn) | del(.timestamp) | del(.xid) | if has("message") then .message |= sub("(?<m>COMMIT|BEGIN) [0-9]+"; "\(.m) XXX") else . end'
+JQSCRIPT='del(.lsn) | del(.nextlsn) | del(.timestamp) | del(.xid) | if (.message|type) == "string" then .message |= sub("(?<m>COMMIT|BEGIN) [0-9]+"; "\(.m) XXX") elif (.message|type) == "object" then .message |= del(.xid) else . end'
 
 jq "${JQSCRIPT}" /usr/src/pgcopydb/${WALFILE} > ${expected}
 jq "${JQSCRIPT}" ${SHAREDIR}/${WALFILE} > ${result}
+
+test -s ${expected} || { echo "expected JSON normalised to nothing"; exit 1; }
+test -s ${result}   || { echo "result JSON normalised to nothing"; exit 1; }
 
 # first command to provide debug information, second to stop when returns non-zero
 diff ${expected} ${result} || cat ${SHAREDIR}/${WALFILE}

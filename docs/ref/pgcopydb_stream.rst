@@ -303,14 +303,18 @@ The following options are available to ``pgcopydb stream`` sub-commands:
 
 --plugin
 
-  Logical decoding output plugin to use. The default is `test_decoding`__
-  which ships with Postgres core itself, so is probably already available on
-  your source server.
+  Logical decoding output plugin to use. The default is `pgoutput`__, which is
+  built into Postgres core since version 10 and needs no extension on the
+  source server. See :ref:`pgcopydb_follow` for the ``--publication`` option
+  that goes with it.
 
-  It is possible to use `wal2json`__ instead. The support for wal2json is
-  mostly historical in pgcopydb, it should not make a user visible
-  difference whether you use the default test_decoding or wal2json.
+  `test_decoding`__ also ships with Postgres core and remains supported.
 
+  `wal2json`__ remains supported, but since CVE-2026-6471 you must add it to
+  the ``output_plugin_libraries`` parameter on the source server, which
+  defaults to ``pgoutput, test_decoding``.
+
+  __ https://www.postgresql.org/docs/current/protocol-logical-replication.html
   __ https://www.postgresql.org/docs/current/test-decoding.html
   __ https://github.com/eulerto/wal2json/
 
