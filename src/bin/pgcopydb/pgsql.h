@@ -527,10 +527,25 @@ bool pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 /* filtering.h includes this header, so only forward-declare the filter set */
 struct SourceFilters;
 
+/* what decides if CREATE PUBLICATION can succeed on the source */
+typedef struct PublicationPrivileges
+{
+	char rolename[NAMEDATALEN];
+	char dbname[NAMEDATALEN];
+	bool isSuperuser;
+	bool canCreateInDatabase;
+	int64_t tableCount;
+	int64_t notOwnedCount;
+	char notOwnedExample[BUFSIZE];
+} PublicationPrivileges;
+
 bool pgsql_create_publication(PGSQL *pgsql, const char *pubName,
 							  struct SourceFilters *filters);
 bool pgsql_drop_publication(PGSQL *pgsql, const char *pubName);
 bool pgsql_publication_exists(PGSQL *pgsql, const char *pubName, bool *exists);
+bool pgsql_check_publication_privileges(PGSQL *pgsql,
+										struct SourceFilters *filters,
+										PublicationPrivileges *privs);
 
 bool pgsql_timestamptz_to_string(TimestampTz ts, char *str, size_t size);
 
