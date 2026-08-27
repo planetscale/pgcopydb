@@ -12,7 +12,7 @@ BUILD_ARGS = --build-arg PGVERSION=$(PGVERSION)
 
 all: pagila pagila-multi-steps blobs unit filtering filtering-standby extensions \
 	 cdc-wal2json cdc-test-decoding cdc-endpos-between-transaction cdc-low-level \
-	 cdc-pgoutput cdc-filtering-pgoutput \
+	 cdc-pgoutput cdc-filtering-pgoutput pgoutput-privileges \
 	 cdc-filtering \
 	 cdc-prune \
 	 follow-pgoutput follow-wal2json follow-standby follow-9.6 follow-data-only follow-target-reconnect \
@@ -66,6 +66,9 @@ cdc-pgoutput: build
 	$(MAKE) -C $@
 
 cdc-filtering-pgoutput: build
+	$(MAKE) -C $@
+
+pgoutput-privileges: build
 	$(MAKE) -C $@
 
 follow-pgoutput: build

@@ -639,6 +639,95 @@ copydb_create_logical_replication_slot(CopyDataSpec *copySpecs,
 
 
 /*
+ * snapshot_check_publication_privileges checks that the source database allows
+ * pgcopydb to create its publication, and explains how to proceed when it does
+ * not.
+ *
+ * CREATE PUBLICATION needs the CREATE privilege on the database, and
+ * CREATE PUBLICATION ... FOR TABLE needs ownership of every published table.
+ * Many managed Postgres services never grant either one to a migration role,
+ * so this is a common setup, not an edge case.
+ */
+static bool
+snapshot_check_publication_privileges(PGSQL *src,
+									  CopyDataSpec *copySpecs,
+									  ReplicationSlot *slot)
+{
+	PublicationPrivileges privs = { 0 };
+
+	if (!pgsql_check_publication_privileges(src,
+											&(copySpecs->filters),
+											&privs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	bool missingCreate = !privs.canCreateInDatabase;
+	bool missingOwnership = privs.notOwnedCount > 0;
+
+	if (!missingCreate && !missingOwnership)
+	{
+		return true;
+	}
+
+	log_error("Failed to create publication \"%s\": role \"%s\" is not "
+			  "allowed to create a publication on database \"%s\"",
+			  slot->publicationName,
+			  privs.rolename,
+			  privs.dbname);
+
+	if (missingCreate)
+	{
+		log_error("Role \"%s\" has no CREATE privilege on database \"%s\"",
+				  privs.rolename, privs.dbname);
+	}
+
+	if (missingOwnership)
+	{
+		log_error("Role \"%s\" does not own %lld of the %lld tables to "
+				  "publish, such as %s",
+				  privs.rolename,
+				  (long long) privs.notOwnedCount,
+				  (long long) privs.tableCount,
+				  privs.notOwnedExample);
+	}
+
+	log_info("Use one of the following options to continue:");
+
+	if (missingCreate)
+	{
+		log_info("1. grant the missing privilege, as the owner of "
+				 "database \"%s\" or as a superuser:",
+				 privs.dbname);
+		log_info("     GRANT CREATE ON DATABASE \"%s\" TO \"%s\";",
+				 privs.dbname, privs.rolename);
+	}
+
+	if (missingOwnership)
+	{
+		log_info("1. grant role \"%s\" membership in the role that owns the "
+				 "tables, as a superuser:", privs.rolename);
+		log_info("     GRANT \"<table owner>\" TO \"%s\";", privs.rolename);
+	}
+
+	log_info("2. create the publication once with a privileged role, then "
+			 "pass --publication to use it:");
+	log_info("     CREATE PUBLICATION \"%s\" FOR ALL TABLES;  "
+			 "-- needs a superuser",
+			 slot->publicationName);
+	log_info("     pgcopydb ... --publication \"%s\"", slot->publicationName);
+	log_info("   pgcopydb never drops a publication named with --publication, "
+			 "and a publication wider than the copied tables is safe");
+
+	log_info("3. use an output plugin that needs no publication:");
+	log_info("     pgcopydb ... --plugin wal2json");
+
+	return false;
+}
+
+
+/*
  * snapshot_prepare_publication makes sure that a publication exists for the
  * pgoutput plugin.
  *
@@ -734,6 +823,18 @@ snapshot_prepare_publication(CopyDataSpec *copySpecs, ReplicationSlot *slot)
 				 slot->publicationName);
 		pgsql_finish(&src);
 		return true;
+	}
+
+	/*
+	 * Check the privileges before the DDL, so that a source database that
+	 * does not allow CREATE PUBLICATION fails with the instructions to fix
+	 * it, instead of with a bare "permission denied" from the server.
+	 */
+	if (!snapshot_check_publication_privileges(&src, copySpecs, slot))
+	{
+		/* errors have already been logged */
+		pgsql_finish(&src);
+		return false;
 	}
 
 	if (!pgsql_create_publication(&src, slot->publicationName,

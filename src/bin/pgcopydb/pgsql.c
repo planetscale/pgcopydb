@@ -5334,25 +5334,23 @@ appendStringLiteralPub(PQExpBuffer buf, const char *str)
 }
 
 
-bool
-pgsql_create_publication(PGSQL *pgsql, const char *pubName,
-						 struct SourceFilters *filters)
+/*
+ * publication_append_table_query appends the query that lists the tables to
+ * publish. The caller provides the SELECT clause so that the table list and
+ * the pre-flight privilege check always see the same set of tables.
+ */
+static void
+publication_append_table_query(PQExpBuffer query,
+							   const char *selectClause,
+							   struct SourceFilters *filters)
 {
-	PQExpBuffer query = createPQExpBuffer();
-
-	if (query == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return false;
-	}
-
 	/*
 	 * Only ordinary and partitioned tables can be published. Reading
 	 * pg_class/pg_namespace directly avoids the pg_tables view, which does not
 	 * report the relkind we need to filter on.
 	 */
+	appendPQExpBufferStr(query, selectClause);
 	appendPQExpBufferStr(query,
-						 "SELECT n.nspname, c.relname"
 						 "  FROM pg_class c"
 						 "  JOIN pg_namespace n ON n.oid = c.relnamespace"
 						 " WHERE c.relkind IN ('r', 'p')"
@@ -5439,6 +5437,24 @@ pgsql_create_publication(PGSQL *pgsql, const char *pubName,
 			}
 		}
 	}
+}
+
+
+bool
+pgsql_create_publication(PGSQL *pgsql, const char *pubName,
+						 struct SourceFilters *filters)
+{
+	PQExpBuffer query = createPQExpBuffer();
+
+	if (query == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	publication_append_table_query(query,
+								   "SELECT n.nspname, c.relname",
+								   filters);
 
 	appendPQExpBufferStr(query, " ORDER BY n.nspname, c.relname");
 
@@ -5475,13 +5491,25 @@ pgsql_create_publication(PGSQL *pgsql, const char *pubName,
 		return false;
 	}
 
+	/*
+	 * A publication with no table decodes no change at all. Fail here instead
+	 * of streaming an empty change set for the whole migration.
+	 */
+	if (!ctx.hasTable)
+	{
+		log_error("Failed to create publication \"%s\": the source database "
+				  "has no table to publish", pubName);
+		log_info("The pgoutput plugin only decodes the tables of a "
+				 "publication, so a publication with no table would stream "
+				 "no change; review the filters in use");
+		destroyPQExpBuffer(tableList);
+		destroyPQExpBuffer(sql);
+		return false;
+	}
+
 	appendPQExpBufferStr(sql, "CREATE PUBLICATION ");
 	appendQuotedIdentPub(sql, pubName);
-
-	if (ctx.hasTable)
-	{
-		appendPQExpBuffer(sql, " FOR TABLE %s", tableList->data);
-	}
+	appendPQExpBuffer(sql, " FOR TABLE %s", tableList->data);
 
 	destroyPQExpBuffer(tableList);
 
@@ -5546,6 +5574,179 @@ pgsql_publication_exists(PGSQL *pgsql, const char *pubName, bool *exists)
 	}
 
 	*exists = context.parsedOk && context.boolVal;
+
+	return true;
+}
+
+
+/*
+ * pgsql_check_publication_privileges collects everything that decides if
+ * CREATE PUBLICATION can succeed on the source database.
+ *
+ * CREATE PUBLICATION needs the CREATE privilege on the database, and
+ * CREATE PUBLICATION ... FOR TABLE needs ownership of every published table.
+ * Ownership through role membership counts, so the ownership test uses
+ * pg_has_role() the same way the server does.
+ */
+typedef struct PublicationPrivilegesContext
+{
+	PublicationPrivileges *privs;
+	bool parsedOk;
+} PublicationPrivilegesContext;
+
+
+static void
+parsePublicationRolePrivileges(void *ctx, PGresult *result)
+{
+	PublicationPrivilegesContext *context = (PublicationPrivilegesContext *) ctx;
+
+	if (PQntuples(result) != 1)
+	{
+		log_error("Query returned %d rows, expected 1", PQntuples(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	if (PQnfields(result) != 4)
+	{
+		log_error("Query returned %d columns, expected 4", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	PublicationPrivileges *privs = context->privs;
+
+	strlcpy(privs->rolename, PQgetvalue(result, 0, 0), sizeof(privs->rolename));
+	strlcpy(privs->dbname, PQgetvalue(result, 0, 1), sizeof(privs->dbname));
+
+	privs->canCreateInDatabase = (*(PQgetvalue(result, 0, 2))) == 't';
+	privs->isSuperuser = (*(PQgetvalue(result, 0, 3))) == 't';
+
+	context->parsedOk = true;
+}
+
+
+static void
+parsePublicationTablePrivileges(void *ctx, PGresult *result)
+{
+	PublicationPrivilegesContext *context = (PublicationPrivilegesContext *) ctx;
+
+	if (PQntuples(result) != 1)
+	{
+		log_error("Query returned %d rows, expected 1", PQntuples(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	if (PQnfields(result) != 3)
+	{
+		log_error("Query returned %d columns, expected 3", PQnfields(result));
+		context->parsedOk = false;
+		return;
+	}
+
+	PublicationPrivileges *privs = context->privs;
+	int errors = 0;
+
+	/* 1. count of tables to publish */
+	if (!stringToInt64(PQgetvalue(result, 0, 0), &(privs->tableCount)))
+	{
+		log_error("Invalid table count \"%s\"", PQgetvalue(result, 0, 0));
+		++errors;
+	}
+
+	/* 2. count of those tables the current role does not own */
+	if (!stringToInt64(PQgetvalue(result, 0, 1), &(privs->notOwnedCount)))
+	{
+		log_error("Invalid table count \"%s\"", PQgetvalue(result, 0, 1));
+		++errors;
+	}
+
+	/* 3. one example of a table the current role does not own, may be NULL */
+	if (!PQgetisnull(result, 0, 2))
+	{
+		strlcpy(privs->notOwnedExample,
+				PQgetvalue(result, 0, 2),
+				sizeof(privs->notOwnedExample));
+	}
+
+	if (errors > 0)
+	{
+		context->parsedOk = false;
+		return;
+	}
+
+	context->parsedOk = true;
+}
+
+
+bool
+pgsql_check_publication_privileges(PGSQL *pgsql,
+								   struct SourceFilters *filters,
+								   PublicationPrivileges *privs)
+{
+	PublicationPrivilegesContext context = { privs, false };
+
+	char *rolePrivilegesQuery =
+		"SELECT current_user::text, "
+		"       current_database()::text, "
+		"       has_database_privilege(current_database(), 'CREATE'), "
+		"       coalesce("
+		"         (SELECT rolsuper FROM pg_roles WHERE rolname = current_user), "
+		"         false)";
+
+	if (!pgsql_execute_with_params(pgsql, rolePrivilegesQuery,
+								   0, NULL, NULL,
+								   &context, &parsePublicationRolePrivileges))
+	{
+		return false;
+	}
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to check the publication privileges of the "
+				  "source database, see above for details");
+		return false;
+	}
+
+	PQExpBuffer query = createPQExpBuffer();
+
+	if (query == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	publication_append_table_query(
+		query,
+		"SELECT count(*), "
+		"       count(*) FILTER (WHERE NOT pg_has_role(current_user, "
+		"                                              c.relowner, 'USAGE')), "
+		"       min(format('%I.%I owned by %I', "
+		"                  n.nspname, c.relname, "
+		"                  pg_get_userbyid(c.relowner))) "
+		"         FILTER (WHERE NOT pg_has_role(current_user, "
+		"                                       c.relowner, 'USAGE')) ",
+		filters);
+
+	context.parsedOk = false;
+
+	if (!pgsql_execute_with_params(pgsql, query->data,
+								   0, NULL, NULL,
+								   &context, &parsePublicationTablePrivileges))
+	{
+		destroyPQExpBuffer(query);
+		return false;
+	}
+
+	destroyPQExpBuffer(query);
+
+	if (!context.parsedOk)
+	{
+		log_error("Failed to check the table ownership of the source "
+				  "database, see above for details");
+		return false;
+	}
 
 	return true;
 }
