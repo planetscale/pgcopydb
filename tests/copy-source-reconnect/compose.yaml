@@ -1,8 +1,6 @@
 services:
   source:
-    build:
-      context: .
-      dockerfile: Dockerfile.pg
+    image: postgres:${PGVERSION:-16}
     expose:
       - 5432
     environment:
@@ -10,11 +8,9 @@ services:
       POSTGRES_PASSWORD: h4ckm3
       POSTGRES_HOST_AUTH_METHOD: trust
     command: >
-      -c wal_level=logical
-      -c output_plugin_libraries=pgoutput,test_decoding,wal2json
-      -c max_wal_senders=10
-      -c max_replication_slots=10
-
+      -c ssl=on
+      -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
+      -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
   target:
     image: postgres:${PGVERSION:-16}
     expose:
@@ -23,19 +19,24 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: h4ckm3
       POSTGRES_HOST_AUTH_METHOD: trust
-
+    command: >
+      -c ssl=on
+      -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
+      -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
   test:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        PGCOPYDB_IMAGE: pgcopydb:pg${PGVERSION:-16}
+    cap_add:
+      - SYS_ADMIN
+      - SYS_PTRACE
     environment:
+      PGSSLMODE: "require"
       PGCOPYDB_SOURCE_PGURI: postgres://postgres:h4ckm3@source/postgres
       PGCOPYDB_TARGET_PGURI: postgres://postgres:h4ckm3@target/postgres
-      PGCOPYDB_TABLE_JOBS: 4
-      PGCOPYDB_INDEX_JOBS: 2
-      PGCOPYDB_OUTPUT_PLUGIN: wal2json
+      PGCOPYDB_TABLE_JOBS: 1
+      PGCOPYDB_INDEX_JOBS: 1
+      PGCOPYDB_FAIL_FAST: "true"
     depends_on:
       - source
       - target

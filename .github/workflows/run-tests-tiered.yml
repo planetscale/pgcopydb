@@ -76,6 +76,7 @@ jobs:
     name: Smoke tests (PG ${{ matrix.PGVERSION }})
     runs-on: ubuntu-latest
     needs: [style_checker, banned_api_checker, docs]
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: true
       matrix:
@@ -166,6 +167,7 @@ jobs:
           - fk-partition-clone
           - follow-defer-validate-fks
           - follow-sequence-reset
+          - copy-source-reconnect
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6

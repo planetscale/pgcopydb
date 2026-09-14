@@ -258,7 +258,8 @@ copydb_close_snapshot(CopyDataSpec *copySpecs)
 		{
 			(void) pgsql_finish(&(snapshot->stream.pgsql));
 		}
-		else if (snapshot->kind == SNAPSHOT_KIND_SQL)
+		else if (snapshot->kind == SNAPSHOT_KIND_SQL &&
+				 pgsql->connection != NULL)
 		{
 			/* only COMMIT sql snapshot kinds, no need for logical rep ones */
 			if (!pgsql_commit(pgsql))
