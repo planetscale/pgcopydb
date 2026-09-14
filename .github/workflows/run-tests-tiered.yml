@@ -151,6 +151,7 @@ jobs:
           - cdc-wal2json
           - cdc-pgoutput
           - cdc-filtering-pgoutput
+          - pgoutput-privileges
           - follow-wal2json
           - follow-pgoutput
           - follow-standby
