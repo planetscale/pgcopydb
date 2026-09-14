@@ -2484,12 +2484,24 @@ is_response_ok(PGresult *result)
 #define SQLSTATE_IS_CONNECTION_EXCEPTION(pgsql) \
 	(pgsql->sqlstate[0] == '0' && pgsql->sqlstate[1] == '8')
 
+/* never widen to Class 57: 57014 query_canceled must not be retried */
+#define SQLSTATE_IS_SESSION_TERMINATION(pgsql) \
+	(strncmp(pgsql->sqlstate, "57P01", 5) == 0 || \
+	 strncmp(pgsql->sqlstate, "57P02", 5) == 0 || \
+	 strncmp(pgsql->sqlstate, "57P03", 5) == 0)
+
 bool
 pgsql_state_is_connection_error(PGSQL *pgsql)
 {
-	return pgsql->connection != NULL &&
-		   (PQstatus(pgsql->connection) == CONNECTION_BAD ||
-			SQLSTATE_IS_CONNECTION_EXCEPTION(pgsql));
+	if (pgsql->connection != NULL &&
+		PQstatus(pgsql->connection) == CONNECTION_BAD)
+	{
+		return true;
+	}
+
+	return pgsql->status == PG_CONNECTION_BAD ||
+		   SQLSTATE_IS_CONNECTION_EXCEPTION(pgsql) ||
+		   SQLSTATE_IS_SESSION_TERMINATION(pgsql);
 }
 
 
@@ -3288,6 +3300,10 @@ pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context)
 			strlcpy(pgsql->sqlstate, sqlstate, sizeof(pgsql->sqlstate));
 		}
 	}
+	else
+	{
+		pgsql->sqlstate[0] = '\0';
+	}
 
 	char *endpoint =
 		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
@@ -3323,6 +3339,11 @@ pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context)
 	if (res != NULL)
 	{
 		PQclear(res);
+	}
+
+	if (PQstatus(pgsql->connection) == CONNECTION_BAD)
+	{
+		pgsql->status = PG_CONNECTION_BAD;
 	}
 
 	clear_results(pgsql);

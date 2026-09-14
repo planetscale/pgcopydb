@@ -1383,6 +1383,42 @@ typedef struct UpdateCopyStatsContext
 } UpdateCopyStatsContext;
 
 
+static bool
+copydb_reset_copy_connections(CopyDataSpec *specs, PGSQL *src, PGSQL *dst)
+{
+	bool srcIsSnapshot = src == &(specs->sourceSnapshot.pgsql);
+
+	(void) pgsql_finish(src);
+	(void) pgsql_finish(dst);
+
+	if (srcIsSnapshot)
+	{
+		if (!copydb_set_snapshot(specs))
+		{
+			log_error("Failed to re-open the source snapshot \"%s\", "
+					  "see above for details",
+					  specs->sourceSnapshot.snapshot);
+			return false;
+		}
+
+		pgsql_set_copy_retry_policy(&(src->retryPolicy));
+	}
+	else if (pgsql_open_connection(src) == NULL)
+	{
+		return false;
+	}
+
+	if (!pgsql_set_gucs(dst, dstSettings))
+	{
+		log_error("Failed to set our GUC settings on the target connection, "
+				  "see above for details");
+		return false;
+	}
+
+	return true;
+}
+
+
 /*
  * copydb_copy_table implements the sub-process activity to pg_dump |
  * pg_restore the table's data and then create the indexes and the constraints
@@ -1434,33 +1470,40 @@ copydb_copy_table(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 	{
 		++attempts;
 
-		/* re-init stats between attempts */
-		CopyStats empty = { 0 };
-		stats = empty;
+		bool connected =
+			attempts == 1 ||
+			copydb_reset_copy_connections(specs, src, dst);
 
-		UpdateCopyStatsContext context = {
-			.specs = specs,
-			.tableSpecs = tableSpecs
-		};
-
-		/* ignore previous attempts, we need only one success here */
-		success = pg_copy(src, dst,
-						  &(tableSpecs->copyArgs), &stats,
-						  &context, &copydb_update_copy_stats_hook);
-
-		if (success)
+		if (connected)
 		{
-			/* success, get out of the retry loop */
-			if (attempts > 1)
+			/* re-init stats between attempts */
+			CopyStats empty = { 0 };
+			stats = empty;
+
+			UpdateCopyStatsContext context = {
+				.specs = specs,
+				.tableSpecs = tableSpecs
+			};
+
+			/* ignore previous attempts, we need only one success here */
+			success = pg_copy(src, dst,
+							  &(tableSpecs->copyArgs), &stats,
+							  &context, &copydb_update_copy_stats_hook);
+
+			if (success)
 			{
-				log_info("Table %s COPY succeeded after %d attempts",
-						 tableSpecs->sourceTable->qname,
-						 attempts);
+				/* success, get out of the retry loop */
+				if (attempts > 1)
+				{
+					log_info("Table %s COPY succeeded after %d attempts",
+							 tableSpecs->sourceTable->qname,
+							 attempts);
+				}
+				break;
 			}
-			break;
 		}
 
-		/* only retry on Connection Exception errors (SQLSTATE class 08) */
+		/* only retry when the source or the target connection is lost */
 		bool isConnectionError =
 			pgsql_state_is_connection_error(src) ||
 			pgsql_state_is_connection_error(dst);
