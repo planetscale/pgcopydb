@@ -4289,7 +4289,7 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 			 * happens, stop streaming — we have all the WAL we need.
 			 */
 			if (context->endpos != InvalidXLogRecPtr &&
-				context->endpos <= cur_record_lsn)
+				context->endpos <= client->current.written_lsn)
 			{
 				log_info("Streamed up to write_lsn %X/%X, "
 						 "flush_lsn %X/%X, stopping: "
