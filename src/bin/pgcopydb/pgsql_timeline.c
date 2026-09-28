@@ -84,44 +84,6 @@ pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system, char *cdcPathDir)
 		return false;
 	}
 
-	/* while at it, we also run the TIMELINE_HISTORY command */
-	if (system->timeline > 1)
-	{
-		TimelineHistoryResult hContext = { 0 };
-
-		char sql[BUFSIZE] = { 0 };
-		sformat(sql, sizeof(sql), "TIMELINE_HISTORY %d", system->timeline);
-
-		result = PQexec(connection, sql);
-
-		if (!is_response_ok(result))
-		{
-			log_error("Failed to request TIMELINE_HISTORY: %s",
-					  PQerrorMessage(connection));
-			PQclear(result);
-			clear_results(pgsql);
-
-			PQfinish(connection);
-
-			return false;
-		}
-
-		(void) parseTimelineHistoryResult((void *) &hContext, result, cdcPathDir);
-
-		PQclear(result);
-		clear_results(pgsql);
-
-		if (!hContext.parsedOk)
-		{
-			log_error("Failed to get result from TIMELINE_HISTORY");
-			PQfinish(connection);
-			return false;
-		}
-
-		/* store the filename for the timeline history file */
-		strlcpy(system->timelineHistoryFilename, hContext.filename, MAXPGPATH);
-	}
-
 	if (connIsOurs)
 	{
 		(void) pgsql_finish(pgsql);

@@ -2895,16 +2895,6 @@ stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream)
 
 	log_debug("Wrote tli %s timeline file \"%s\"", tli, specs->paths.tlifile);
 
-	/* read from the timeline history file and populate internal catalogs */
-	if (stream->system.timeline > 1 &&
-		!parse_timeline_history_file(stream->system.timelineHistoryFilename,
-									 specs->sourceDB,
-									 stream->system.timeline))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
 	return true;
 }
 
