@@ -1,15 +1,18 @@
 # Contributing to pgcopydb
 
+PlanetScale maintains this fork directly and does not merge changes back to the
+upstream project. Send everything here, not to `dimitri/pgcopydb`. See
+[About this fork](README.md#about-this-fork).
+
 We're happy you want to contribute! You can help us in different ways:
 
-* Open an [issue](https://github.com/dimitri/pgcopydb/issues) with suggestions
-  for improvements, potential bugs, etc.
+* Open an [issue](https://github.com/planetscale/pgcopydb/issues) with
+  suggestions for improvements, potential bugs, etc.
 * Fork this repository and submit a pull request
 
 ### Building from source code
 
-Follow the relevant docs at our
-[documentation](https://pgcopydb.readthedocs.io/en/latest/install.html#build-from-sources).
+Follow [Build from sources](docs/install.rst) in the documentation.
 
 ### Following our coding conventions
 
@@ -65,10 +68,10 @@ make tests/pagila
 
 ### Documentation
 
-User-facing documentation is published on
-[pgcopydb.readthedocs.io](https://pgcopydb.readthedocs.io/). When adding a new
-feature, function, or setting, you are expected to add relevant documentation
-change in your pull request.
+User-facing documentation lives in [docs/](docs/) and is built with Sphinx. Run
+`make -C docs html` to read it locally. When adding a new feature, function, or
+setting, you are expected to add relevant documentation change in your pull
+request.
 
 If you changed the help output of a pgcopydb command, you are expected to update
 the relevant pieces of our documentation. This can be done automatically by

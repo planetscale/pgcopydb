@@ -133,16 +133,31 @@ The internal SQL-like script format
 
 The Postgres Logical Decoding API does not provide a CDC format, instead it
 allows Postgres extension developers to implement *logical decoding output
-plugins*. The Postgres core distribution implements such an output plugin
-named `test_decoding`__. Another commonly used output plugin is named
-`wal2json`__.
+plugins*. The Postgres core distribution implements two such output plugins,
+`pgoutput`__ and `test_decoding`__. Another commonly used output plugin is
+named `wal2json`__, which the source server must install as an extension.
 
-__ https://www.postgresql.org/docs/16/test-decoding.html
+__ https://www.postgresql.org/docs/current/protocol-logical-replication.html
+__ https://www.postgresql.org/docs/current/test-decoding.html
 __ https://github.com/eulerto/wal2json
 
-pgcopydb is compatible with both ``test_decoding`` and ``wal2json`` plugins. 
-As a user it's possible to choose an output plugin with the ``--plugin``
-command-line option.
+pgcopydb is compatible with the ``pgoutput``, ``test_decoding`` and
+``wal2json`` plugins. Choose one with the ``--plugin`` command-line option.
+
+``pgoutput`` is the default. It ships with Postgres core, so CDC needs no
+extension on the source server, which matters on a managed service where you
+cannot install one. It also sends a compact binary protocol: on a mixed
+INSERT/UPDATE/DELETE workload it used 4.5x less network volume and about 4x
+less source CPU than ``wal2json``.
+
+``pgoutput`` decodes the tables of a publication rather than the whole
+database. Without ``--publication``, pgcopydb creates a publication from the
+table list in ``--filters`` and drops it again during
+:ref:`pgcopydb_stream_cleanup`, so the source server does the filtering.
+Creating one needs the ``CREATE`` privilege on the database and ownership of
+every published table. pgcopydb checks both before it runs the DDL, and when
+the privileges are missing it reports the options: grant them, pass an
+existing publication with ``--publication``, or use ``--plugin wal2json``.
 
 The output plugin compatibility means that pgcopydb has to implement code to
 parse the output plugin syntax and make sense of it. Internally, the

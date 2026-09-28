@@ -1,18 +1,18 @@
 Welcome to pgcopydb's documentation!
 ====================================
 
-The `pgcopydb`__ project is an Open Source Software project. The development
-happens at `https://github.com/dimitri/pgcopydb`__ and is public: everyone
-is welcome to participate by opening issues, pull requests, giving feedback,
-etc.
+pgcopydb is an Open Source Software project. PlanetScale launched this fork
+in 2026 and maintains it directly. Development happens in public at
+`https://github.com/planetscale/pgcopydb`__, where everyone is welcome to
+open issues and pull requests.
 
-Remember that the first steps are to actually play with the ``pgcopydb``
-command, then read the entire available documentation (after all, I took the
-time to write it), and then to address the community in a kind and polite
-way — the same way you would expect people to use when addressing you.
+pgcopydb was created by `Dimitri Fontaine`__, whose design carries this
+project. PlanetScale no longer targets full parity with the upstream project,
+and does not merge this work back to it. Direction comes from what PlanetScale
+customers need when they migrate production databases.
 
-__ https://github.com/dimitri/pgcopydb
-__ https://github.com/dimitri/pgcopydb
+__ https://github.com/planetscale/pgcopydb
+__ https://github.com/dimitri
 
 
 How to copy a Postgres database
@@ -111,6 +111,7 @@ Schema Restoration Error Tolerance
    features
    concurrency
    resume
+   operations
 
 .. toctree::
    :hidden:

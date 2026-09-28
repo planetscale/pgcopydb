@@ -1,69 +1,29 @@
 Installing pgcopydb
 ===================
 
-Several distributions are available for pgcopydb.
-
-debian packages
----------------
-
-Binary packages for debian and derivatives (ubuntu) are available from
-`apt.postgresql.org`__ repository, install by following the linked
-documentation and then::
-
-  $ sudo apt-get install pgcopydb
-
-__ https://wiki.postgresql.org/wiki/Apt
-
-
-RPM packages
-------------
-
-The Postgres community repository for RPM packages is `yum.postgresql.org`__
-and includes binary packages for pgcopydb. The way packages are built for
-RPM based systems means that the user needs to choose which version of
-Postgres pgcopydb was built with. In practice, this doesn't have much
-importance, because ``libpq`` is meant to be compatible with many different
-Postgres server versions.
-
-After following the instructions for installing the repository, in this
-example in a Docker image for Rocky Linux (``docker run --rm -it
-rockylinux:9``), then we get the following::
-
-   # dnf search --all --quiet pgcopydb
-   ======================== Name & Description & URL Matched: pgcopydb ========================
-   pgcopydb.x86_64 : Automate pg_dump | pg_restore between two running Postgres servers
-   pgcopydb_11.x86_64 : Automate pg_dump | pg_restore between two running Postgres servers
-   pgcopydb_12.x86_64 : Automate pg_dump | pg_restore between two running Postgres servers
-   pgcopydb_13.x86_64 : Automate pg_dump | pg_restore between two running Postgres servers
-   pgcopydb_14.x86_64 : Automate pg_dump | pg_restore between two running Postgres servers
-   pgcopydb_15.x86_64 : Automate pg_dump | pg_restore between two running Postgres servers
-
-__ https://yum.postgresql.org
+There are two ways to install pgcopydb: pull a container image, or build from
+source.
 
 Docker Images
 -------------
 
-Docker images are maintained for each tagged release at dockerhub, and also
-built from the CI/CD integration on GitHub at each commit to the `main`
-branch.
+Docker images are published to the GitHub container registry at
+`ghcr.io/planetscale/pgcopydb`__. Each commit to the `main` branch publishes
+the ``latest`` tag, and each version tag publishes its own ``X.Y.Z`` tag, with
+no leading ``v``. The images are built for ``linux/amd64`` and
+``linux/arm64``.
 
-The DockerHub `dimitri/pgcopydb`__ repository is where the tagged releases
-are made available. The image uses the Postgres version currently in debian
-stable.
+To use a tagged release::
 
-To use this docker image::
+  $ docker run --rm -it ghcr.io/planetscale/pgcopydb:0.19.0 pgcopydb --version
 
-  $ docker run --rm -it dimitri/pgcopydb:v0.17 pgcopydb --version
+Or to follow the main branch::
 
-__ https://hub.docker.com/r/dimitri/pgcopydb#!
+  $ docker pull ghcr.io/planetscale/pgcopydb:latest
+  $ docker run --rm -it ghcr.io/planetscale/pgcopydb:latest pgcopydb --version
+  $ docker run --rm -it ghcr.io/planetscale/pgcopydb:latest pgcopydb --help
 
-
-Or you can use the CI/CD integration that publishes packages from the main
-branch to the GitHub docker repository::
-
-  $ docker pull ghcr.io/dimitri/pgcopydb:latest
-  $ docker run --rm -it ghcr.io/dimitri/pgcopydb:latest pgcopydb --version
-  $ docker run --rm -it ghcr.io/dimitri/pgcopydb:latest pgcopydb --help
+__ https://github.com/planetscale/pgcopydb/pkgs/container/pgcopydb
 
 
 Build from sources
@@ -76,44 +36,57 @@ build process uses a GNU Makefile.
 See our main `Dockerfile`__ for a complete recipe to build pgcopydb as a
 debian package when using a debian environment.
 
-__ https://github.com/dimitri/pgcopydb/blob/main/Dockerfile
+__ https://github.com/planetscale/pgcopydb/blob/main/Dockerfile
 
 In particular, the following build dependencies are required to build
 pgcopydb. The list is long, because pgcopydb requires a lot of the same
-packages as Postgres itself:
+packages as Postgres itself.
 
-::
-   
-  $ apt-get install -y --no-install-recommends \
+On Ubuntu 24.04, with the PostgreSQL 18 server development package::
+
+  $ apt-get install -y \
+      postgresql-client-18 \
+      postgresql-18 \
+      postgresql-server-dev-18
+
+  $ apt-get install -y \
       build-essential \
-      autotools-dev \
-      libedit-dev \
-      libgc-dev \
-      libpam0g-dev \
-      libreadline-dev \
-      libselinux1-dev \
-      libxslt1-dev \
+      git \
       libssl-dev \
-      libkrb5-dev \
-      zlib1g-dev \
-      liblz4-dev \
-      libpq5 \
       libpq-dev \
+      libgc-dev \
+      liblz4-dev \
+      libpam0g-dev \
+      libxml2-dev \
+      libxslt1-dev \
+      libreadline-dev \
+      zlib1g-dev \
+      libncurses5-dev \
+      libkrb5-dev \
+      libselinux1-dev \
       libzstd-dev \
-      postgresql-server-dev-all \
-      postgresql-common \
-      postgresql \
-      python3-sphinx
+      libnuma-dev
 
+Replace ``18`` with the major version of the Postgres client you want the
+binary to carry. A newer client reads older servers, so the newest one you can
+install is usually the right choice.
 
 Then the build process is pretty simple, in its simplest form you can just
-use ``make clean install``.
-If you want to be more fancy, you can also consider::
+use ``make clean install``. Put the Postgres binaries on your ``PATH`` first,
+so the build finds ``pg_config``::
 
+  $ export PATH=/usr/lib/postgresql/18/bin:$PATH
   $ make -s clean
   $ make -s -j12 install
+
+PlanetScale publishes templates that build a migration host this way, with the
+package list above already applied. See the `pgcopydb templates`__ in the
+migration-scripts repository, which include an AWS CloudFormation stack that
+provisions an instance, builds pgcopydb from a release tag, and installs it.
+
+__ https://github.com/planetscale/migration-scripts/tree/main/pgcopydb-templates
 
 Once you made it this far, it is a good idea to check our `Contribution
 Guide`__.
 
-__ https://github.com/dimitri/pgcopydb/blob/main/CONTRIBUTING.md
+__ https://github.com/planetscale/pgcopydb/blob/main/CONTRIBUTING.md

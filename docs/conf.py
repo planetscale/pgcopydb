@@ -18,8 +18,8 @@
 # -- Project information -----------------------------------------------------
 
 project = 'pgcopydb'
-copyright = '2022-2024, Dimitri Fontaine'
-author = 'Dimitri Fontaine'
+copyright = '2022-2025, Dimitri Fontaine; 2026 onwards, PlanetScale'
+author = 'PlanetScale, and Dimitri Fontaine'
 
 # The full version, including alpha/beta/rc tags
 version = '0.17~dev'
