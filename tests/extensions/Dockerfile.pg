@@ -1,7 +1,7 @@
-ARG PGVERSION=16
+ARG PGVERSION=18
 FROM postgres:${PGVERSION}
 
-ARG PGVERSION=16
+ARG PGVERSION=18
 USER root
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \

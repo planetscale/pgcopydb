@@ -1,6 +1,6 @@
 services:
   source:
-    image: postgres:${PGVERSION:-17}
+    image: postgres:${PGVERSION:-18}
     expose:
       - 5432
     environment:
@@ -9,7 +9,7 @@ services:
       POSTGRES_HOST_AUTH_METHOD: trust
 
   target:
-    image: postgres:${PGVERSION:-17}
+    image: postgres:${PGVERSION:-18}
     expose:
       - 5432
     environment:

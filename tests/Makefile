@@ -1,7 +1,7 @@
 # Copyright (c) 2021 The PostgreSQL Global Development Group.
 # Licensed under the PostgreSQL License.
 
-PGVERSION ?= 17
+PGVERSION ?= 18
 export PGVERSION
 
 # Auto-detect docker or podman

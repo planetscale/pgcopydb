@@ -1,11 +1,11 @@
 services:
   source:
-    image: postgres-wal2json:${PGVERSION:-17}
+    image: postgres-wal2json:${PGVERSION:-18}
     build:
       context: .
       dockerfile: Dockerfile.pg
       args:
-        PGVERSION: ${PGVERSION:-17}
+        PGVERSION: ${PGVERSION:-18}
     user: postgres
     expose:
       - 5432
@@ -29,7 +29,7 @@ services:
       -c max_replication_slots=10
 
   target:
-    image: postgres:${PGVERSION:-17}
+    image: postgres:${PGVERSION:-18}
     user: postgres
     expose:
       - 5432
