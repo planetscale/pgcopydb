@@ -467,7 +467,6 @@ startLogicalStreaming(StreamSpecs *specs)
 	stream.closeFunction = &streamClose;
 	stream.feedbackFunction = &streamFeedback;
 	stream.keepaliveFunction = &streamKeepalive;
-	strlcpy(stream.cdcPathDir, specs->paths.dir, MAXPGPATH);
 
 	/*
 	 * Read possibly already existing file to initialize the start LSN from a
@@ -2855,10 +2854,46 @@ stream_fetch_current_lsn(uint64_t *lsn,
 }
 
 
-/*
- * stream_write_context writes the wal_segment_size and tli to files, as well as
- * populate our internal catalogs with information in the timeline history file.
- */
+static bool
+stream_check_timeline(StreamSpecs *specs, uint32_t timeline)
+{
+	if (!file_exists(specs->paths.tlifile))
+	{
+		return true;
+	}
+
+	char *contents = NULL;
+	long size = 0L;
+
+	if (!read_file(specs->paths.tlifile, &contents, &size))
+	{
+		return false;
+	}
+
+	uint32_t previous = 0;
+
+	if (!stringToUInt(contents, &previous))
+	{
+		log_error("Failed to parse timeline \"%s\" from \"%s\"",
+				  contents, specs->paths.tlifile);
+		return false;
+	}
+
+	if (previous == timeline)
+	{
+		return true;
+	}
+
+	log_error("Source timeline changed from %u to %u", previous, timeline);
+	log_error("The source was promoted or restored to an earlier point in time");
+	log_error("Changes already applied to the target may not exist on the "
+			  "timeline the source follows now");
+	log_error("Compare the source and the target, then start a new migration");
+
+	return false;
+}
+
+
 bool
 stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream)
 {
@@ -2886,6 +2921,11 @@ stream_write_context(StreamSpecs *specs, LogicalStreamClient *stream)
 	char tli[BUFSIZE] = { 0 };
 
 	bytes = sformat(tli, sizeof(tli), "%d", system->timeline);
+
+	if (!stream_check_timeline(specs, system->timeline))
+	{
+		return false;
+	}
 
 	if (!write_file(tli, bytes, specs->paths.tlifile))
 	{
@@ -3009,14 +3049,6 @@ stream_read_context(StreamSpecs *specs)
 	}
 
 	if (!stringToUInt(tli, &(system->timeline)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	DatabaseCatalog *source = specs->sourceDB;
-	if (!catalog_lookup_timeline_history(source, system->timeline,
-										 &system->currentTimeline))
 	{
 		/* errors have already been logged */
 		return false;

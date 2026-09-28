@@ -9,10 +9,6 @@
 #include "schema.h"
 
 /* pgsql_timeline.c */
-bool pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system,
-						   char *cdcPathDir);
-bool parse_timeline_history_file(char *filename,
-								 DatabaseCatalog *catalog,
-								 uint32_t currentTimeline);
+bool pgsql_identify_system(PGSQL *pgsql, IdentifySystem *system);
 
 #endif /* PGSQL_TIMELINE_H */

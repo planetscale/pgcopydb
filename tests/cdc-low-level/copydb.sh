@@ -161,5 +161,30 @@ test "${rows}" -eq 25000
 # unpatched pgcopydb only syncs at COMMIT/EOF, which fails this assertion
 test "${syncs}" -ge 5
 
+TLIFILE=${SHAREDIR}/tli
+
+echo "recording timeline 2, as a source promoted before this run would"
+
+printf '2' > ${TLIFILE}
+
+psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
+
+lsn=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c 'select pg_current_wal_lsn()'`
+
+set +e
+pgcopydb stream receive --resume --endpos "${lsn}" > /tmp/timeline.log 2>&1
+rc=$?
+set -e
+
+cat /tmp/timeline.log
+
+test "${rc}" -ne 0
+
+grep -q "Source timeline changed from 2 to 1" /tmp/timeline.log
+
+test "$(cat ${TLIFILE})" = "2"
+
+rm -f ${TLIFILE}
+
 # cleanup
 pgcopydb stream cleanup --verbose
