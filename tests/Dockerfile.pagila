@@ -1,4 +1,4 @@
-ARG PGVERSION=16
+ARG PGVERSION=18
 ARG PGCOPYDB_IMAGE=pgcopydb:latest
 
 # Create a named stage from the pgcopydb image for COPY --from

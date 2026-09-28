@@ -13,8 +13,8 @@ Key capabilities:
 **Container-only builds are required.** Do not run `make` or `make bin` on the host — use containers to avoid dependency conflicts.
 
 ```bash
-PGVERSION=16 make build          # Build in container (Docker)
-DOCKER=podman PGVERSION=16 make build  # If using Podman instead of Docker
+PGVERSION=18 make build          # Build in container (Docker)
+DOCKER=podman PGVERSION=18 make build  # If using Podman instead of Docker
 ```
 
 ### Build dependencies (installed inside the container)
@@ -29,9 +29,9 @@ DOCKER=podman PGVERSION=16 make build  # If using Podman instead of Docker
 Always run tests before committing. Tests use Docker Compose to spin up PostgreSQL source/target instances.
 
 ```bash
-PGVERSION=16 make tests          # Run all 17 test suites
-PGVERSION=16 make tests/pagila   # Run a specific suite
-PGVERSION=16 make tests/unit     # Unit tests
+PGVERSION=18 make tests          # Run all test suites
+PGVERSION=18 make tests/pagila   # Run a specific suite
+PGVERSION=18 make tests/unit     # Unit tests
 ```
 
 Test suites by category:
@@ -64,7 +64,7 @@ Documentation lives in `docs/` and is built with Sphinx (reStructuredText).
 When adding or modifying CLI commands:
 
 1. Update help text in the C source files
-2. Build in container: `PGVERSION=16 make build`
+2. Build in container: `PGVERSION=18 make build`
 3. Run `make update-docs` to regenerate `docs/include/*.rst`
 4. Commit both the code changes and the generated docs
 

@@ -14,7 +14,7 @@ x-postgres-wal2json: &x-postgres-wal2json
       context: .
       dockerfile: Dockerfile.pg
       args:
-        PGVERSION: ${PGVERSION:-16}
+        PGVERSION: ${PGVERSION:-18}
     user: postgres
     expose:
       - 5432
@@ -69,7 +69,7 @@ services:
         condition: service_healthy
 
   target:
-    image: postgres:${PGVERSION:-16}
+    image: postgres:${PGVERSION:-18}
     expose:
       - 5432
     environment:

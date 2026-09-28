@@ -1,5 +1,5 @@
 DOCKER ?= docker
-PGVERSION ?= 16
+PGVERSION ?= 18
 
 test:
 	$(DOCKER) compose down

@@ -6,7 +6,7 @@ FROM debian:12-slim AS build
 ARG TARGETPLATFORM
 ARG TARGETOS
 ARG TARGETARCH
-ARG PGVERSION=16
+ARG PGVERSION=18
 
 # Configure apt to retry on transient failures
 RUN echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries
@@ -95,7 +95,7 @@ FROM debian:12-slim AS run
 ARG TARGETPLATFORM
 ARG TARGETOS
 ARG TARGETARCH
-ARG PGVERSION=16
+ARG PGVERSION=18
 
 # used to configure Github Packages
 LABEL org.opencontainers.image.source=https://github.com/dimitri/pgcopydb
