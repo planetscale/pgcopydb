@@ -1,0 +1,20 @@
+globs:
+  - "docs/**/*.md"
+  - "README.md"
+  - "CONTRIBUTING.md"
+
+config:
+  # Help blocks and terminal transcripts set their own width.
+  MD013: false
+
+  # Help blocks are generated; their fences carry no language.
+  MD040: false
+
+  # Command examples are written with a "$" prompt and no output.
+  MD014: false
+
+  # Bold labels are used for option names and short definitions.
+  MD036: false
+
+  # Two admonitions in a row read as one quote with a blank line.
+  MD028: false

@@ -4,141 +4,105 @@ set -e
 set -u
 set -o pipefail
 
-# This script is used to update the help messages in the docs.
-
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
-INCLUDE_DIR="$SCRIPT_DIR/include"
 
-# set PGCOPYDB if not already set
 if [ -z "${PGCOPYDB:-}" ]; then
     PGCOPYDB="${SCRIPT_DIR}/../src/bin/pgcopydb/pgcopydb"
 fi
 
-echo "Updating documentation templates using binary ${PGCOPYDB}"
+echo "Updating help messages using binary ${PGCOPYDB}"
 
-# Given a single command, print the help text, and wrap the output in rst style
-# code block format in a file under include directory
-function print_help_to_file() {
+function help_text() {
+    local cmd="$1"
+    local out
+    local rc
 
+    case "${cmd}" in
+        "pgcopydb")
+            out="$(${PGCOPYDB} --help 2>&1)"
+            rc=$?
+            ;;
+        "pgcopydb help")
+            out="$(${PGCOPYDB} help 2>&1)"
+            rc=$?
+            ;;
+        *)
+            # shellcheck disable=SC2086
+            out="$(${PGCOPYDB} ${cmd#pgcopydb } --help 2>&1)"
+            rc=$?
+            ;;
+    esac
 
-    # expand all positional parameters and trim whitespace at the end
-    local cmd
-    cmd=$(echo "$*" | sed -E "s/^ +//")
-
-    # Replace spaces in the command name with dashes to generate the file name.
-    #
-    # We print the output of
-    #   `pgcopydb --help` to `pgcopydb.rst`
-    #   `pgcopydb compare --help` to `compare.rst`
-    #   `pgcopydb compare data --help` to `compare-data.rst` etc.
-    #
-    #  One exception is the `pgcopydb help` command. We print the output of
-    #  `pgcopydb help` to `help.rst` instead of supplying a `--help` argument to
-    #  the command.
-    local file_path
-    local help_cmd
-    if [ "${cmd}" = "" ]; then
-        help_cmd="${PGCOPYDB} --help 2>&1"
-        file_path="${INCLUDE_DIR}/pgcopydb.rst"
-    elif [ "${cmd}" = "help" ]; then
-        help_cmd="${PGCOPYDB} help 2>&1"
-        file_path="${INCLUDE_DIR}/help.rst"
-    else
-        help_cmd="${PGCOPYDB} ${cmd} --help 2>&1"
-        file_path="${INCLUDE_DIR}/${cmd// /-}.rst"
+    if [ ${rc} -ne 0 ]; then
+        echo "error: \"${cmd}\" exited with status ${rc}" >&2
+        printf '%s\n' "${out}" >&2
+        return 1
     fi
 
-    # Generate help text by running the command, removing the line with version
-    # information and adding 3 spaces at the beginning of each line
-    local help_text
-    help_text="$( eval "${help_cmd}"  |
-        sed -e '/.*Running pgcopydb version.*/d' -e 's/^/   /'
-    )"
-
-
-    # Wrao the help text in a rst code block and print to file
-    {
-        echo "::"
-        echo
-        echo "${help_text}"
-    } >"${file_path}"
+    printf '%s\n' "${out}" | grep -v 'Running pgcopydb version' || true
 }
 
-# Parse the output of `pgcopydb help` and call print_help_to_file for each command
-function parse_help_output() {
+function update_file() {
+    local file="$1"
+    local tmp
+    tmp="$(mktemp)"
 
+    local in_block=0
+    local count=0
     local cmd=""
-    local subcmd=""
-    # Loop over all the lines of the help text, parse commands and subcommands,
-    # and call print_help_to_file for each command.
-    #
-    # Currently the output of `pgcopydb help` starts with:
-    #
-    #   pgcopydb
-    #     clone     Clone an entire database from source to target
-    #     fork      Clone an entire database from source to target
-    #     follow    Replay changes from the source database to the target database
-    #     ...
-    #     ...
-    #     ping      Attempt to connect to the source and target instances
-    #     help      Print help message
-    #     version   Print pgcopydb version
-    #
-    #   pgcopydb compare
-    #     schema  Compare source and target schema
-    #     data    Compare source and target data
-    #
-    # We parse these lines one by one, and store portions of the commands in
-    # variables cmd and subcmd. For example, for the line that corresponds to
-    # `pgcopydb compare schema`, we set cmd to `compare` and subcmd to `schema`
-    while read -r l; do
-        subcmd=""
-        # Parse first section of the help text:
-        #   pgcopydb
-        if [[ ${l} =~ ^pgcopydb$ ]]; then
-            cmd=""
+    local text=""
 
-        # Parse other section headers of the help text that contain `pgcopydb <cmd>`
-        #
-        # For example:
-        #   pgcopydb compare
-        #   pgcopydb copy
-        #   pgcopydb dump
-        #
-        # These commands should already be printed in an earlier section.
-        # Therefore we store the command name in a variable and move on to the
-        # next line for parsing subcommands
-        elif [[ ${l} =~ ^pgcopydb\ (.+) ]]; then
+    while IFS= read -r line || [ -n "${line}" ]; do
+        if [[ ${line} =~ ^\<!--\ BEGIN\ HELP:\ (.+)\ --\>$ ]]; then
             cmd="${BASH_REMATCH[1]}"
-            continue;
+            count=$((count + 1))
 
-        # Parse subcommands that are followed by a section header. For example,
-        # there are the subcommands under pgcopydb strem sentinel section:
-        #     setup   Setup the sentinel table
-        #     get     Get the sentinel table values
-        #   + set     Set the sentinel table values
-        #
-        # Here we have an optional + character followed by the subcommand name.
-        # The subcommand may contain lowercase alphabetical characters or dashes
-        # (e.g. table-parts).
-        elif [[ ${l} =~ ^(\+ )?([a-z-]+) ]]; then
-            subcmd="${BASH_REMATCH[2]}"
+            if ! text="$(help_text "${cmd}")"; then
+                rm -f "${tmp}"
+                echo "error: ${file} asks for help of \"${cmd}\"" >&2
+                return 1
+            fi
 
-        # Skip all other lines that does not match. (e.g. empty lines)
-        else
+            {
+                printf '%s\n' "${line}"
+                printf '```\n'
+                printf '%s\n' "${text}"
+                printf '```\n'
+            } >>"${tmp}"
+
+            in_block=1
             continue
         fi
 
-        # print the help message for the subcommand to file
-        print_help_to_file "${cmd} ${subcmd}"
+        if [[ ${line} == "<!-- END HELP -->" ]]; then
+            in_block=0
+            printf '%s\n' "${line}" >>"${tmp}"
+            continue
+        fi
 
-    done < <(${PGCOPYDB} help 2>&1)
+        if [ ${in_block} -eq 0 ]; then
+            printf '%s\n' "${line}" >>"${tmp}"
+        fi
+    done <"${file}"
+
+    if [ ${in_block} -ne 0 ]; then
+        rm -f "${tmp}"
+        echo "error: ${file} has a BEGIN HELP marker with no END HELP" >&2
+        return 1
+    fi
+
+    mv "${tmp}" "${file}"
+    echo "  ${file}: ${count} help block(s)"
 }
 
-# Delete all the existing help files and recreate them
-rm -f "${INCLUDE_DIR}/*"
-parse_help_output
+found=0
 
-# Remove the help messages for the commands that are not covered in docs
-rm -rf "${INCLUDE_DIR}/fork.rst" \
-       "${INCLUDE_DIR}/version.rst"
+while IFS= read -r file; do
+    found=$((found + 1))
+    update_file "${file}" || exit 1
+done < <(grep -rl --include='*.md' '<!-- BEGIN HELP: ' "${SCRIPT_DIR}" | sort)
+
+if [ ${found} -eq 0 ]; then
+    echo "error: no documentation page asks for a help block" >&2
+    exit 1
+fi
