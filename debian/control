@@ -19,7 +19,6 @@ Build-Depends:
  libzstd-dev,
  postgresql,
  postgresql-server-dev-all (>= 158~),
- python3-sphinx,
  zlib1g-dev,
 Standards-Version: 4.6.0
 Homepage: https://github.com/dimitri/pgcopydb

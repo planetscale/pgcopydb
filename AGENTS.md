@@ -57,15 +57,15 @@ CI enforces style — PRs with formatting issues will fail the style check.
 
 ## Documentation
 
-Documentation lives in `docs/` and is built with Sphinx (reStructuredText).
+Documentation lives in `docs/` as Markdown, which GitHub renders directly.
 
-**Never manually edit files in `docs/include/*.rst`.** These are auto-generated from CLI help text and manual edits will be overwritten.
+**Never manually edit the text between `<!-- BEGIN HELP: ... -->` and `<!-- END HELP -->` markers.** Those blocks are auto-generated from CLI help text and manual edits will be overwritten.
 
 When adding or modifying CLI commands:
 
 1. Update help text in the C source files
 2. Build in container: `PGVERSION=18 make build`
-3. Run `make update-docs` to regenerate `docs/include/*.rst`
+3. Run `make update-docs` to refresh the help blocks
 4. Commit both the code changes and the generated docs
 
 If `make update-docs` fails locally, use the container binary:
@@ -182,6 +182,6 @@ Never create PRs against the upstream `dimitri/pgcopydb` repository without expl
 
 **Never:**
 - Build on the host system
-- Manually edit `docs/include/*.rst`
+- Manually edit the text inside `<!-- BEGIN HELP: ... -->` markers
 - Force push to any branch
 - Create PRs against upstream `dimitri/pgcopydb`

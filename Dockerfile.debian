@@ -22,7 +22,6 @@ RUN apt-get update \
         postgresql-server-dev-all \
         postgresql-common \
         postgresql \
-        python3-sphinx \
         lintian \
         curl \
   && rm -rf /var/lib/apt/lists/*

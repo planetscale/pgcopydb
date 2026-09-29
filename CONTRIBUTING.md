@@ -1,24 +1,27 @@
 # Contributing to pgcopydb
 
+PlanetScale maintains this fork directly and does not merge changes back to the
+upstream project. Send everything here, not to `dimitri/pgcopydb`. See
+[About this fork](README.md#about-this-fork).
+
 We're happy you want to contribute! You can help us in different ways:
 
-* Open an [issue](https://github.com/dimitri/pgcopydb/issues) with suggestions
-  for improvements, potential bugs, etc.
+* Open an [issue](https://github.com/planetscale/pgcopydb/issues) with
+  suggestions for improvements, potential bugs, etc.
 * Fork this repository and submit a pull request
 
-### Building from source code
+## Building from source code
 
-Follow the relevant docs at our
-[documentation](https://pgcopydb.readthedocs.io/en/latest/install.html#build-from-sources).
+Follow [Build from sources](docs/install.md#build-from-sources) in the
+documentation.
 
-### Following our coding conventions
+## Following our coding conventions
 
 CI pipeline will automatically reject any PRs which do not follow our coding
 conventions. The easiest way to ensure your PR adheres to those conventions is
 to use the
 [citus_indent](https://github.com/citusdata/tools/tree/develop/uncrustify) tool.
 This tool uses `uncrustify` under the hood.
-
 
 ```bash
 # On debian, run the following to install uncrustify.
@@ -47,7 +50,7 @@ __EOF__
 chmod +x .git/hooks/pre-commit
 ```
 
-### Running tests
+## Running tests
 
 pgcopydb uses docker containers to create test environments. Each test lives
 under a separate directory under `tests/` directory at the top directory of the
@@ -63,20 +66,32 @@ make tests
 make tests/pagila
 ```
 
-### Documentation
+## Documentation
 
-User-facing documentation is published on
-[pgcopydb.readthedocs.io](https://pgcopydb.readthedocs.io/). When adding a new
-feature, function, or setting, you are expected to add relevant documentation
-change in your pull request.
+User-facing documentation lives in [docs/](docs/) as Markdown, which GitHub
+renders directly. When adding a new feature, function, or setting, you are
+expected to add relevant documentation change in your pull request.
 
-If you changed the help output of a pgcopydb command, you are expected to update
-the relevant pieces of our documentation. This can be done automatically by
-running the following command:
+If you changed the help output of a pgcopydb command, run:
 
 ```bash
 make update-docs
 ```
 
-This command will update the relevant documentation templates according to your
-latest code changes.
+Each documentation page embeds command help between markers:
+
+```
+<!-- BEGIN HELP: pgcopydb clone -->
+...
+<!-- END HELP -->
+```
+
+`make update-docs` builds the binary and rewrites the block between each pair of
+markers with the current help output. CI fails when a page is out of date, so
+run it and commit the result. Do not edit the text inside those markers by hand.
+
+Markdown is linted in CI, and the same check runs locally in a container:
+
+```bash
+make lint-docs     # markdownlint, configured by .markdownlint-cli2.yaml
+```

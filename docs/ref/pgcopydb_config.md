@@ -1,0 +1,164 @@
+# pgcopydb configuration
+
+Manual page for the configuration of pgcopydb. The `pgcopydb` command accepts
+sub-commands and command line options, see the manual for those commands for
+details. The only setup that `pgcopydb` commands accept is the filtering.
+
+## Filtering
+
+Filtering allows to skip some object definitions and data when copying from the
+source to the target database. The pgcopydb commands that accept the option
+`--filter` (or `--filters`) expect an existing filename as the option argument.
+The given filename is read in the INI file format, but only uses sections and
+option keys. Option values are not used.
+
+Here is an inclusion based filter configuration example:
+
+```ini
+[include-only-table]
+public.allcols
+public.csv
+public.serial
+public.xzero
+
+[exclude-index]
+public.foo_gin_tsvector
+
+[exclude-table-data]
+public.csv
+```
+
+Here is an exclusion based filter configuration example:
+
+```ini
+[exclude-schema]
+foo
+bar
+expected
+
+[exclude-table]
+"schema"."name"
+schema.othername
+err.errors
+public.serial
+
+[exclude-index]
+schema.indexname
+
+[exclude-table-data]
+public.bar
+nsitra.test1
+```
+
+Filtering can be done with pgcopydb by using the following rules, which are also
+the name of the sections of the INI file.
+
+### include-only-table
+
+This section allows listing the exclusive list of the source tables to copy to
+the target database. No other table will be processed by pgcopydb.
+
+Each line in that section should be a schema-qualified table name.
+[Postgres identifier quoting rules](https://www.postgresql.org/docs/current/sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS)
+can be used to avoid ambiguity.
+
+When the section `include-only-table` is used in the filtering configuration
+then the sections `exclude-schema` and `exclude-table` are disallowed. We would
+not know how to handle tables that exist on the source database and are not part
+of any filter.
+
+Materialized views are also considered as tables during the filtering.
+
+### exclude-schema
+
+This section allows adding schemas (Postgres namespaces) to the exclusion
+filters. All the tables that belong to any listed schema in this section are
+going to be ignored by the pgcopydb command.
+
+This section is not allowed when the section `include-only-table` is used.
+
+### include-only-schema
+
+This section allows editing schema (Postgres namespaces) to the exclusion
+filters by listing the schema that are not going to be excluded. This is a
+syntactic sugar facility that helps with entering a long list of schemas to
+exclude when a single schema is to be selected.
+
+Despite the name, this section is an exclusion filter.
+
+This section is not allowed when the section `exclude-schema` is used.
+
+### exclude-table
+
+This section allows to add a list of qualified table names to the exclusion
+filters. All the tables that are listed in the `exclude-table` section are going
+to be ignored by the pgcopydb command.
+
+This section is not allowed when the section `include-only-table` is used.
+
+Materialized views are also considered as tables during the filtering.
+
+### exclude-index
+
+This section allows to add a list of qualified index names to the exclusion
+filters. It is then possible for pgcopydb to operate on a table and skip a
+single index definition that belong to a table that is still processed.
+
+### exclude-table-data
+
+This section allows to skip copying the data from a list of qualified table
+names. The schema, index, constraints, etc of the table are still copied over.
+
+Materialized views are also considered as tables during the filtering.
+
+### exclude-extension
+
+This section allows excluding specific PostgreSQL extensions from being
+migrated. When an extension is excluded, **all database objects created by that
+extension** are automatically excluded as well.
+
+This includes:
+
+- Extension-owned tables, views, and materialized views
+- Extension-created functions and procedures
+- Extension-defined types, operators, and casts
+- Extension-owned schemas
+- Any other objects with a dependency on the extension
+
+Example:
+
+```ini
+[exclude-extension]
+pgvector
+pg_cron
+timescaledb
+```
+
+This section is not allowed when the section `include-only-extension` is used.
+
+### include-only-extension
+
+This section allows specifying which extensions should be migrated. Only the
+listed extensions and their dependent objects will be copied. This is mutually
+exclusive with `exclude-extension`.
+
+Example:
+
+```ini
+[include-only-extension]
+postgis
+uuid-ossp
+```
+
+This section is not allowed when the section `exclude-extension` is used.
+
+## Reviewing and debugging the filters
+
+Filtering a `pg_restore` archive file is done through rewriting the archive
+catalog obtained with `pg_restore --list`. That's a little hackish at times, and
+we also have to deal with dependencies in pgcopydb itself.
+
+The following commands can be used to explore a set of filtering rules:
+
+- [pgcopydb list depends](pgcopydb_list.md#pgcopydb-list-depends)
+- [pgcopydb restore parse-list](pgcopydb_restore.md#pgcopydb-restore-parse-list)

@@ -6,6 +6,8 @@ PGCOPYDB ?= $(TOP)src/bin/pgcopydb/pgcopydb
 PGVERSION ?= 18
 DOCKER ?= docker
 
+MARKDOWNLINT ?= davidanson/markdownlint-cli2@sha256:9ae6011b3d978315ad283bf2af997ef08687a797b9e55086c94a90bf620f0783
+
 all: bin ;
 
 GIT-VERSION-FILE:
@@ -26,9 +28,6 @@ maintainer-clean:
 	$(MAKE) -C src/bin/ maintainer-clean
 	rm -f version
 
-docs:
-	$(MAKE) -C docs clean man html
-
 update-docs: bin
 	bash ./docs/update-help-messages.sh
 
@@ -36,6 +35,9 @@ check-docs:
 	cat Dockerfile ci/Dockerfile.docs.template > ci/Dockerfile.docs
 	$(DOCKER) build --file=ci/Dockerfile.docs --tag test-docs .
 	$(DOCKER) run test-docs
+
+lint-docs:
+	$(DOCKER) run --rm -v "$(CURDIR)":/workdir $(MARKDOWNLINT)
 
 test: build
 	$(MAKE) -C tests all
@@ -79,7 +81,7 @@ debsh-qa: deb-qa
 	$(DOCKER) run --rm -it pgcopydb_debian_qa bash
 
 .PHONY: all
-.PHONY: bin clean install docs maintainer-clean update-docs
+.PHONY: bin clean install maintainer-clean update-docs lint-docs
 .PHONY: test tests tests/ci tests/*
 .PHONY: deb debsh deb-qa debsh-qa
 .PHONY: GIT-VERSION-FILE

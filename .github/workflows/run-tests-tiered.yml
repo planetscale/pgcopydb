@@ -52,10 +52,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
 
-      - name: Build docs
-        uses: ammaraskar/sphinx-action@c61ac11d9ee097caf8983c10c8b5af5861b32b54  # master
-        with:
-          docs-folder: "docs/"
+      - name: Lint Markdown
+        run: make lint-docs
 
       - name: Set Version String From .git
         run: make version

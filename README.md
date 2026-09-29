@@ -1,6 +1,22 @@
 # pgcopydb
 
-[![Documentation Status](https://readthedocs.org/projects/pgcopydb/badge/?version=latest)](https://pgcopydb.readthedocs.io/en/latest/?badge=latest)
+## About this fork
+
+PlanetScale launched this fork of pgcopydb in 2026 and maintains it directly.
+
+pgcopydb was created by [Dimitri Fontaine](https://github.com/dimitri), whose
+design carries this project: parallel COPY without intermediate files,
+concurrent index builds, and change data capture through logical decoding. The
+fork builds on that work.
+
+PlanetScale no longer targets full parity with the upstream project, and does
+not merge this work back to it. Direction comes from what PlanetScale customers
+need when they migrate production databases. A fix that upstream also carries
+gets ported deliberately, one change at a time, rather than by tracking the
+upstream branch.
+
+Report issues and open pull requests against
+[planetscale/pgcopydb](https://github.com/planetscale/pgcopydb).
 
 ## Introduction
 
@@ -39,9 +55,8 @@ implement the offline migration approach.
 
 ## Documentation
 
-Full documentation is available online, including manual pages of all the
-pgcopydb sub-commands. Check out
-[https://pgcopydb.readthedocs.io/](https://pgcopydb.readthedocs.io/en/latest/).
+The documentation lives in [docs/](docs/), including manual pages of all the
+pgcopydb sub-commands. Start at [docs/README.md](docs/README.md).
 
 ```
 $ pgcopydb help
@@ -246,6 +261,7 @@ dotenv pgcopydb clone
 - **`PGCOPYDB_TARGET_PGURI`** - PostgreSQL connection string for the target database
 
 Connection strings follow the standard PostgreSQL format:
+
 ```
 postgres://[user[:password]@][host][:port][/dbname][?param1=value1&...]
 ```
@@ -280,11 +296,12 @@ PGSSLROOTCERT="/path/to/ca-cert.pem"
 PGCOPYDB_SOURCE_PGURI="postgres://user@prod.example.com:5432/myapp?sslmode=verify-full"
 PGCOPYDB_TARGET_PGURI="postgres://user@backup.example.com:5432/myapp?sslmode=verify-full"
 ```
+
 See the included `.env.example` file for a complete configuration template.
 
 ## Installing pgcopydb
 
-See our [documentation](https://pgcopydb.readthedocs.io/en/latest/install.html).
+See [docs/install.md](docs/install.md).
 
 ## Design Considerations (why oh why)
 
@@ -407,7 +424,8 @@ of the operations. See documentation for `pgcopydb snapshot`.
 
 ## Authors
 
-* [Dimitri Fontaine](https://github.com/dimitri)
+- [PlanetScale team](https://github.com/planetscale) (2026 onwards)
+- [Dimitri Fontaine](https://github.com/dimitri) (pre 2026)
 
 ## License
 

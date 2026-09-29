@@ -1,0 +1,146 @@
+# pgcopydb snapshot
+
+pgcopydb snapshot - Create and export a snapshot on the source database
+
+The command `pgcopydb snapshot` connects to the source database and executes a
+SQL query to export a snapshot. The obtained snapshot is both printed on stdout
+and also in a file where other pgcopydb commands might expect to find it.
+
+<!-- BEGIN HELP: pgcopydb snapshot -->
+```
+pgcopydb snapshot: Create and export a snapshot on the source database
+usage: pgcopydb snapshot  --source ... 
+
+  --source                      Postgres URI to the source database
+  --dir                         Work directory to use
+  --follow                      Implement logical decoding to replay changes
+  --plugin                      Output plugin to use (pgoutput, test_decoding, wal2json)
+  --publication                 Publication to use with the pgoutput plugin
+  --filters <filename>          Use the filters defined in <filename>
+  --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin
+  --slot-name                   Use this Postgres replication slot name
+```
+<!-- END HELP -->
+
+## Options
+
+The following options are available to `pgcopydb snapshot`:
+
+`--source`
+
+Connection string to the source Postgres instance. See the Postgres
+documentation for
+[connection strings](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING)
+for the details. In short both the quoted form `"host=... dbname=..."` and the
+URI form `postgres://user@host:5432/dbname` are supported.
+
+`--dir`
+
+During its normal operations pgcopydb creates a lot of temporary files to track
+sub-processes progress. Temporary files are created in the directory specified
+by this option, or defaults to `${TMPDIR}/pgcopydb` when the environment
+variable is set, or otherwise to `/tmp/pgcopydb`.
+
+`--follow`
+
+When the `--follow` option is used then pgcopydb implements Change Data Capture
+as detailed in the manual page for [pgcopydb follow](pgcopydb_follow.md) in
+parallel to the main copy database steps.
+
+The replication slot is created using the Postgres replication protocol command
+CREATE_REPLICATION_SLOT, which then exports the snapshot being used in that
+command.
+
+`--plugin`
+
+Logical decoding output plugin to use. The default is
+[pgoutput](https://www.postgresql.org/docs/current/protocol-logical-replication.html),
+which is built into Postgres core since version 10 and needs no extension on
+the source server. See [pgcopydb follow](pgcopydb_follow.md) for the
+`--publication` option that goes with it.
+
+[test_decoding](https://www.postgresql.org/docs/current/test-decoding.html) also
+ships with Postgres core and remains supported.
+
+[wal2json](https://github.com/eulerto/wal2json/) remains supported, but since
+CVE-2026-6471 you must add it to the `output_plugin_libraries` parameter on the
+source server, which defaults to `pgoutput, test_decoding`.
+
+`--wal2json-numeric-as-string`
+
+When using the wal2json output plugin, it is possible to use the
+`--wal2json-numeric-as-string` option to instruct wal2json to output numeric
+values as strings and thus prevent some precision loss.
+
+You need to have a wal2json plugin version on source database that supports
+`--numeric-data-types-as-string` option to use this option.
+
+See also the documentation for
+[wal2json](https://github.com/eulerto/wal2json/pull/255) regarding this option
+for details.
+
+`--slot-name`
+
+Logical decoding slot name to use.
+
+`--verbose`
+
+Increase current verbosity. The default level of verbosity is INFO. In ascending
+order pgcopydb knows about the following verbosity levels: FATAL, ERROR, WARN,
+INFO, NOTICE, DEBUG, TRACE.
+
+`--debug`
+
+Set current verbosity to DEBUG level.
+
+`--trace`
+
+Set current verbosity to TRACE level.
+
+`--quiet`
+
+Set current verbosity to ERROR level.
+
+## Environment
+
+`PGCOPYDB_SOURCE_PGURI`
+
+Connection string to the source Postgres instance. When `--source` is omitted
+from the command line, then this environment variable is used.
+
+`PGCOPYDB_OUTPUT_PLUGIN`
+
+Logical decoding output plugin to use. When `--plugin` is omitted from the
+command line, then this environment variable is used.
+
+`PGCOPYDB_WAL2JSON_NUMERIC_AS_STRING`
+
+When true (or *yes*, or *on*, or 1, same input as a Postgres boolean) then
+pgcopydb uses the wal2json option `--numeric-data-types-as-string` when using
+the wal2json output plugin.
+
+When `--wal2json-numeric-as-string` is omitted from the command line then this
+environment variable is used.
+
+## Examples
+
+Create a snapshot on the source database in the background:
+
+```
+$ pgcopydb snapshot &
+[1] 72938
+17:31:52 72938 INFO  Running pgcopydb version 0.19.0
+17:31:52 72938 INFO  Using work dir "/tmp/pgcopydb"
+17:31:52 72938 INFO  Removing the stale pid file "/tmp/pgcopydb/pgcopydb.aux.pid"
+17:31:52 72938 INFO  Work directory "/tmp/pgcopydb" already exists
+17:31:52 72938 INFO  Exported snapshot "00000003-000CB5FE-1" from the source database
+00000003-000CB5FE-1
+```
+
+And when the process is done, stop maintaining the snapshot in the background:
+
+```
+$ kill %1
+17:31:56 72938 INFO  Asked to terminate, aborting
+[1]+  Done                    pgcopydb snapshot
+```
