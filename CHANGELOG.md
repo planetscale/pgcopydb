@@ -1,3 +1,99 @@
+### pgcopydb v0.20 (September 2026) ###
+
+Builds on v0.19. The `pgoutput` logical decoding plugin is added and is
+now the default. The rest of the release is bug fixes in CDC apply,
+resume, filtering, and table splitting.
+
+### Added
+
+* The `pgoutput` logical decoding plugin. `pgoutput` ships with PostgreSQL
+  core, so CDC needs no extension on the source server. On a mixed
+  INSERT/UPDATE/DELETE workload it used 4.5x less network volume and about
+  4x less source CPU than `wal2json`. The receive step decodes the binary
+  protocol into the existing wal2json-shaped message, so transform and apply
+  are unchanged
+* `--publication` to use an existing publication instead of one that
+  pgcopydb creates and drops, and `--filters` on `pgcopydb snapshot` for
+  multi-step migrations, which create the publication at the snapshot step
+* A check that stops CDC when the source timeline changes. A promotion or a
+  point-in-time restore forks the source history, and changes already
+  applied to the target can belong to a branch the new source does not
+  have. The check runs on every reconnect and every resume
+* A CDC file prune watchdog with `--prune-threshold` and `--prune-min-age`.
+  It deletes applied `.json` and `.sql` files once their total size passes
+  the threshold, oldest first, and only below `replay_lsn`. Disabled by
+  default
+
+### Changed
+
+* `pgoutput` is the default plugin. `wal2json` and `test_decoding` are still
+  supported with `--plugin`
+* pgcopydb checks the publication privileges before it runs
+  `CREATE PUBLICATION`. It reports a missing `CREATE` privilege on the
+  database and missing table ownership together, with the options to
+  continue: grant the privilege, supply a publication with `--publication`,
+  or use `--plugin wal2json`. An empty table list is now an error instead of
+  a publication that decodes no change
+* CDC changes for filtered-out tables are dropped at transform time, not
+  only at apply time. On one large source 44% of the statements in a WAL
+  segment were for excluded tables. The apply-time check remains
+
+### Fixed
+
+**CDC apply:**
+* Bound the libpq pipeline backlog with a 1 MB byte-based sync. Apply was
+  quadratic in the backlog size because libpq shifts its whole buffer on
+  every partial read or send. On a production-shaped 85 MB file the apply
+  time went from 64 s to 4 s
+* Emit float8 values as the shortest decimal string that round-trips. The
+  previous `%f` truncated to 6 decimal places, and a fixed `%.17g` breaks
+  the `REPLICA IDENTITY FULL` WHERE-clause match and silently diverges the
+  target
+* Stop the stream when the endpos is set on an idle source. The feedback
+  timer tested a variable that is reset on every loop pass, so a source with
+  no further WAL activity never stopped
+* Treat a downstream `EPIPE` at endpos as a clean shutdown, so a completed
+  migration is no longer reported as a failure. The supervisor also declares
+  success when apply exits cleanly and endpos is durably applied
+* Reset the target sequences at the end of a standalone `pgcopydb follow`
+  run that reaches endpos, as `clone --follow` already does
+* Stop sending `TIMELINE_HISTORY` on the logical replication connection.
+  Managed services such as Azure refuse the command, so CDC failed on every
+  source above timeline 1, which is the state after a failover, a
+  point-in-time restore or a major version upgrade. Nothing read the
+  result, so the command and the code behind it are removed
+
+**Copy and resume:**
+* Fix the schema dump from a PostgreSQL 17 or 18 source. The image carried
+  the PostgreSQL 16 client, so `pg_dump` stopped with "aborting because of
+  server version mismatch". The image now carries the PostgreSQL 18
+  `pg_dump` and `pg_restore`, which read servers back to 9.2
+* Retry a table COPY after a source connection failure. SQLSTATE 57P01,
+  57P02 and 57P03 are treated as connection errors, both connections are
+  reset, and the snapshot is re-opened when the source holds it
+* Retry the post-copy VACUUM ANALYZE up to 3 times when the target
+  connection drops. A genuine SQL error is still fatal. The libpq error
+  report no longer hides the cause behind "connection pointer is NULL"
+* Re-drive index and constraint creation for split tables on `--resume`.
+  The enqueue gate compared a stored PID from the previous run, so no live
+  worker matched and a half-built index was never promoted to a constraint
+* Base the CTID split part count on the total table size, heap plus TOAST.
+  A 3 GiB heap with 936 GiB of TOAST became one serial COPY job. The count
+  is capped by `--split-max-parts` and by the heap page count
+
+**Schema and filtering:**
+* Key the filter table on `(catoid, oid)`. An OID is unique only inside one
+  catalog, so a `pg_type` OID could match a `pg_proc` filter row and drop
+  the wrong object
+* Skip the internal per-partition FK clones when listing FK constraints.
+  Recreating them produced single-partition foreign keys that no row can
+  satisfy, which blocked all writes and CDC apply
+* Count EXCLUSION constraint indexes in the indexes-left total, so the
+  constraint phase runs once. With `--index-jobs 1` it ran twice and failed
+  with "index is already associated with a constraint"
+* Restore the original large object owner on PostgreSQL 17 and later, where
+  pgcopydb creates the object itself
+
 ### pgcopydb v0.19 ###
 
 Builds on v0.18 with a focus on foreign-key constraint handling for
