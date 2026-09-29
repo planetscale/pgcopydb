@@ -2289,11 +2289,14 @@ cli_list_progress(int argc, char **argv)
 		char totalBytesPretty[BUFSIZE] = { 0 };
 		char doneBytesPretty[BUFSIZE] = { 0 };
 		char inProgressBytesPretty[BUFSIZE] = { 0 };
+		const double bytesPerGB = 1024.0 * 1024.0 * 1024.0;
 
-		pretty_print_bytes(totalBytesPretty, BUFSIZE, progress.totalBytes);
-		pretty_print_bytes(doneBytesPretty, BUFSIZE, progress.doneBytes);
-		pretty_print_bytes(inProgressBytesPretty, BUFSIZE,
-						   progress.inProgressBytes);
+		sformat(totalBytesPretty, BUFSIZE, "%.3f GB",
+				((double) progress.totalBytes) / bytesPerGB);
+		sformat(doneBytesPretty, BUFSIZE, "%.3f GB",
+				((double) progress.doneBytes) / bytesPerGB);
+		sformat(inProgressBytesPretty, BUFSIZE, "%.3f GB",
+				((double) progress.inProgressBytes) / bytesPerGB);
 
 		fformat(stdout, "%12s | %12s | %12s | %12s\n",
 				"Bytes",
