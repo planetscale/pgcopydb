@@ -1,3 +1,9 @@
+pgcopydb (0.20-1) unstable; urgency=medium
+
+  * Release 0.20 of pgcopydb
+
+ -- Chris Munns <munns@planetscale.com>  Tue, 29 Sep 2026 09:53:00 -0400
+
 pgcopydb (0.17-1) unstable; urgency=medium
 
   * Official 0.17 release of pgcopydb
