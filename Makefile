@@ -39,6 +39,9 @@ check-docs:
 lint-docs:
 	$(DOCKER) run --rm -v "$(CURDIR)":/workdir $(MARKDOWNLINT)
 
+release-notes:
+	@bash ./ci/release-notes.sh $(TAG)
+
 test: build
 	$(MAKE) -C tests all
 
@@ -81,7 +84,7 @@ debsh-qa: deb-qa
 	$(DOCKER) run --rm -it pgcopydb_debian_qa bash
 
 .PHONY: all
-.PHONY: bin clean install maintainer-clean update-docs lint-docs
+.PHONY: bin clean install maintainer-clean update-docs lint-docs release-notes
 .PHONY: test tests tests/ci tests/*
 .PHONY: deb debsh deb-qa debsh-qa
 .PHONY: GIT-VERSION-FILE

@@ -55,6 +55,11 @@ jobs:
       - name: Lint Markdown
         run: make lint-docs
 
+      - name: Check the changelog covers the current version
+        run: |
+          version=$(grep '^DEF_VER=' GIT-VERSION-GEN | cut -d= -f2)
+          bash ci/release-notes.sh "v${version}" > /dev/null
+
       - name: Set Version String From .git
         run: make version
 
