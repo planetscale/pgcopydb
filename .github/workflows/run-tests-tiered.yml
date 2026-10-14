@@ -166,6 +166,7 @@ jobs:
           - follow-defer-validate-fks
           - follow-sequence-reset
           - copy-source-reconnect
+          - resume-vacuum
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
