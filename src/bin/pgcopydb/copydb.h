@@ -269,6 +269,8 @@ typedef struct CopyDataSpec
 	bool hasDBCreatePrivilege;
 	bool hasDBTempPrivilege;
 
+	char targetStartTime[BUFSIZE];
+
 	Catalogs catalogs;
 } CopyDataSpec;
 
