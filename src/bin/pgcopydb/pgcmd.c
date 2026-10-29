@@ -1955,7 +1955,8 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 		log_info("ACL: extracted schema '%s' from FUNCTION/TYPE/TABLE ACL",
 				 item->restoreListName);
 
-		item->tagType = ARCHIVE_TAG_TYPE_OTHER;
+		item->tagType = token.desc == ARCHIVE_TAG_POLICY ?
+						ARCHIVE_TAG_TYPE_POLICY : ARCHIVE_TAG_TYPE_OTHER;
 		return true;
 	}
 

@@ -114,6 +114,7 @@ usage: pgcopydb restore post-data  --dir <dir> [ --source <URI> ] --target <URI>
   --skip-ext-comments  Skip restoring COMMENT ON EXTENSION
   --skip-collations    Skip restoring collations
   --skip-publications  Skip restoring publications
+  --skip-row-security  Skip restoring row security policies and RLS enablement
   --filters <filename> Use the filters defined in <filename>
   --restart            Allow restarting when temp files exist already
   --resume             Allow resuming operations after a failure

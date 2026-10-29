@@ -19,7 +19,7 @@ all: pagila pagila-multi-steps blobs unit filtering filtering-standby extensions
 	 endpos-in-multi-wal-txn exclude-extension \
 	 blob-snapshot-release follow-defer-indexes fk-not-valid defer-validate-fks \
 	 fk-partition-clone follow-defer-validate-fks follow-sequence-reset \
-	 copy-source-reconnect resume-vacuum;
+	 copy-source-reconnect resume-vacuum skip-row-security;
 
 pagila: build
 	$(MAKE) -C $@
@@ -123,6 +123,9 @@ copy-source-reconnect: build
 resume-vacuum: build
 	$(MAKE) -C $@
 
+skip-row-security: build
+	$(MAKE) -C $@
+
 timescaledb: build
 	$(MAKE) -C $@
 
@@ -138,4 +141,4 @@ build:
 .PHONY: endpos-in-multi-wal-txn exclude-extension
 .PHONY: blob-snapshot-release follow-defer-indexes fk-not-valid defer-validate-fks
 .PHONY: fk-partition-clone follow-defer-validate-fks follow-sequence-reset
-.PHONY: copy-source-reconnect resume-vacuum
+.PHONY: copy-source-reconnect resume-vacuum skip-row-security
