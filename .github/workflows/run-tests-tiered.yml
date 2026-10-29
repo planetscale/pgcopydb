@@ -140,6 +140,7 @@ jobs:
           - extensions
           # - timescaledb  # temporarily disabled: failing due to an upstream timescaledb issue
           - skip-publications
+          - skip-row-security
           - skip-vacuum
           - skip-large-objects
           - cdc-low-level

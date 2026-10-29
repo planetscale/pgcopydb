@@ -97,6 +97,7 @@ static CommandLine restore_schema_post_data_command =
 		"  --skip-ext-comments  Skip restoring COMMENT ON EXTENSION\n" \
 		"  --skip-collations    Skip restoring collations\n" \
 		"  --skip-publications  Skip restoring publications\n" \
+		"  --skip-row-security  Skip restoring row security policies and RLS enablement\n" \
 		"  --filters <filename> Use the filters defined in <filename>\n"
 		"  --restart            Allow restarting when temp files exist already\n"
 		"  --resume             Allow resuming operations after a failure\n"
@@ -187,6 +188,7 @@ cli_restore_schema_getopts(int argc, char **argv)
 		{ "trace", no_argument, NULL, 'z' },
 		{ "quiet", no_argument, NULL, 'q' },
 		{ "restore-tolerance", required_argument, NULL, 256 },
+		{ "skip-row-security", no_argument, NULL, 257 },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
 	};
@@ -425,6 +427,13 @@ cli_restore_schema_getopts(int argc, char **argv)
 				}
 				log_trace("--restore-tolerance %d",
 						  options.restoreOptions.restoreTolerance);
+				break;
+			}
+
+			case 257:
+			{
+				options.skipRowSecurity = true;
+				log_trace("--skip-row-security");
 				break;
 			}
 
