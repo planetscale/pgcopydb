@@ -55,6 +55,7 @@ TIER3=(
     extensions
     timescaledb
     skip-publications
+    skip-row-security
     skip-vacuum
     skip-large-objects
     cdc-low-level

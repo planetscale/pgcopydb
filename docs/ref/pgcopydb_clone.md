@@ -43,6 +43,7 @@ usage: pgcopydb clone  --source ... --target ... [ --table-jobs ... --index-jobs
   --skip-ext-comments           Skip restoring COMMENT ON EXTENSION
   --skip-collations             Skip restoring collations
   --skip-publications           Skip restoring publications
+  --skip-row-security           Skip restoring row security policies and RLS enablement
   --skip-vacuum                 Skip running VACUUM ANALYZE
   --skip-analyze                Skip running vacuumdb --analyze-only
   --skip-db-properties          Skip copying ALTER DATABASE SET properties
@@ -545,6 +546,25 @@ Then this option allows pgcopydb to skip over collations and assume all the
 needed collations have been deployed on the target database already.
 
 See also [pgcopydb list collations](pgcopydb_list.md#pgcopydb-list-collations).
+
+`--skip-row-security`
+
+Skip the row security objects in the schema restore. pgcopydb removes the
+`POLICY`, `ROW SECURITY`, and `COMMENT ON POLICY` entries from the
+`pg_restore` list. The target database then has no policies, and row level
+security is not enabled on any table.
+
+Use this option when the source policies do not apply on the target. For
+example, a policy can name a role that does not exist on the target:
+`CREATE POLICY ... TO report_reader`. Without this option, each such policy
+fails to restore and counts against `--restore-tolerance`.
+
+pgcopydb skips both entry types together. If it skipped only the policies, the
+tables would keep row level security enabled with no policies. A role that does
+not own a table and does not have `BYPASSRLS` would then read zero rows from it.
+
+See also [Row Security Policies](https://www.postgresql.org/docs/current/ddl-rowsecurity.html)
+in the Postgres documentation.
 
 `--skip-vacuum`
 
