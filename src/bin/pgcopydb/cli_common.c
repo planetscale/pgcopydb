@@ -701,6 +701,7 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "prune-threshold", required_argument, NULL, 260 },
 		{ "prune-min-age", required_argument, NULL, 261 },
 		{ "publication", required_argument, NULL, 262 },
+		{ "skip-row-security", no_argument, NULL, 263 },
 		{ "help", no_argument, NULL, 'h' },
 		{ NULL, 0, NULL, 0 }
 	};
@@ -1248,6 +1249,13 @@ cli_copy_db_getopts(int argc, char **argv)
 						sizeof(options.slot.publicationName));
 
 				log_trace("--publication %s", options.slot.publicationName);
+				break;
+			}
+
+			case 263:
+			{
+				options.skipRowSecurity = true;
+				log_trace("--skip-row-security");
 				break;
 			}
 

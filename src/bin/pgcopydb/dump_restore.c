@@ -839,6 +839,23 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 		log_notice("Skipping PUBLICATION \"%s\"", name);
 	}
 
+	if (specs->skipRowSecurity &&
+		(item->desc == ARCHIVE_TAG_POLICY ||
+		 item->desc == ARCHIVE_TAG_ROW_SECURITY))
+	{
+		skip = true;
+		log_notice("Skipping %s \"%s\"", item->description, name);
+	}
+
+	if (specs->skipRowSecurity &&
+		item->isCompositeTag &&
+		item->tagKind == ARCHIVE_TAG_KIND_COMMENT &&
+		item->tagType == ARCHIVE_TAG_TYPE_POLICY)
+	{
+		skip = true;
+		log_notice("Skipping COMMENT ON POLICY \"%s\"", name);
+	}
+
 	if (!skip && catOid == PG_NAMESPACE_OID)
 	{
 		bool exists = false;

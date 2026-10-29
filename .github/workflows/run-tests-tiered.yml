@@ -55,6 +55,11 @@ jobs:
       - name: Lint Markdown
         run: make lint-docs
 
+      - name: Check the changelog covers the current version
+        run: |
+          version=$(grep '^DEF_VER=' GIT-VERSION-GEN | cut -d= -f2)
+          bash ci/release-notes.sh "v${version}" > /dev/null
+
       - name: Set Version String From .git
         run: make version
 
@@ -140,6 +145,7 @@ jobs:
           - extensions
           # - timescaledb  # temporarily disabled: failing due to an upstream timescaledb issue
           - skip-publications
+          - skip-row-security
           - skip-vacuum
           - skip-large-objects
           - cdc-low-level
@@ -167,6 +173,7 @@ jobs:
           - follow-sequence-reset
           - copy-source-reconnect
           - index-target-terminate
+          - resume-vacuum
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
