@@ -843,7 +843,7 @@ summary_add_vacuum(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 	}
 
 	char *sql =
-		"insert into vacuum_summary(pid, tableoid, start_time_epoch)"
+		"insert or replace into vacuum_summary(pid, tableoid, start_time_epoch)"
 		"values($1, $2, $3)";
 
 	if (!semaphore_lock(&(catalog->sema)))
