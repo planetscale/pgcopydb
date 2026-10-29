@@ -153,6 +153,7 @@ jobs:
           - cdc-prune
           - cdc-endpos-between-transaction
           - cdc-filtering
+          - cdc-message-handling
           - cdc-wal2json
           - cdc-pgoutput
           - cdc-filtering-pgoutput
@@ -164,6 +165,7 @@ jobs:
           - follow-data-only
           - follow-target-reconnect
           - endpos-in-multi-wal-txn
+          - exclude-extension
           - blob-snapshot-release
           - follow-defer-indexes
           - fk-not-valid
