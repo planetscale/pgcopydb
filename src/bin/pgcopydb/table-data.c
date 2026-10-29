@@ -24,6 +24,7 @@
 #include "signals.h"
 #include "string_utils.h"
 #include "summary.h"
+#include "target_state.h"
 
 
 static bool copydb_copy_supervisor_add_table_hook(void *ctx, SourceTable *table);
@@ -65,6 +66,8 @@ copydb_copy_all_table_data(CopyDataSpec *specs)
 		/* errors have already been logged */
 		return false;
 	}
+
+	(void) copydb_target_inspect(specs);
 
 	if (!copydb_process_table_data(specs))
 	{
@@ -1034,7 +1037,7 @@ copydb_copy_data_by_oid(CopyDataSpec *specs, PGSQL *src, PGSQL *dst,
 		{
 			if (!copydb_copy_table(specs, src, dst, tableSpecs))
 			{
-				/* errors have already been logged */
+				(void) copydb_target_report(specs, dst);
 				return false;
 			}
 		}

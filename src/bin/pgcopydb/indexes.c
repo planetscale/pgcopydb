@@ -20,6 +20,7 @@
 #include "signals.h"
 #include "string_utils.h"
 #include "summary.h"
+#include "target_state.h"
 
 
 static bool copydb_add_table_indexes_hook(void *context, SourceIndex *index);
@@ -190,6 +191,8 @@ copydb_start_index_workers(CopyDataSpec *specs)
 	log_info("STEP 6: starting %d CREATE INDEX processes", specs->indexJobs);
 	log_info("STEP 7: constraints are built by the CREATE INDEX processes");
 
+	(void) copydb_target_inspect(specs);
+
 	for (int i = 0; i < specs->indexJobs; i++)
 	{
 		/*
@@ -305,6 +308,8 @@ copydb_index_worker(CopyDataSpec *specs)
 				if (!copydb_create_index_by_oid(specs, &dst, mesg.data.oid))
 				{
 					++errors;
+
+					(void) copydb_target_report(specs, &dst);
 
 					log_error("Failed to create index with oid %u, "
 							  "see above for details",

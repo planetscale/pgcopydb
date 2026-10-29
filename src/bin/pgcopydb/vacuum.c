@@ -16,6 +16,7 @@
 #include "log.h"
 #include "signals.h"
 #include "summary.h"
+#include "target_state.h"
 
 /* number of times to attempt VACUUM ANALYZE when the target connection drops */
 #define VACUUM_ANALYZE_MAX_ATTEMPTS 3
@@ -392,6 +393,12 @@ vacuum_analyze_table_by_oid(CopyDataSpec *specs, uint32_t oid)
 
 		/* only a lost/broken connection is worth retrying */
 		bool connectionLost = (dst.status == PG_CONNECTION_BAD);
+
+		if (connectionLost && attempt == VACUUM_ANALYZE_MAX_ATTEMPTS)
+		{
+			(void) copydb_target_report(specs, &dst);
+		}
+
 		(void) pgsql_finish(&dst);
 
 		if (!connectionLost || attempt == VACUUM_ANALYZE_MAX_ATTEMPTS)

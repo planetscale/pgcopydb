@@ -172,6 +172,7 @@ jobs:
           - follow-defer-validate-fks
           - follow-sequence-reset
           - copy-source-reconnect
+          - index-target-terminate
           - resume-vacuum
     steps:
       - name: Checkout repository
