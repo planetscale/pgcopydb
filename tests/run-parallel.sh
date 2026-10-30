@@ -60,17 +60,32 @@ TIER3=(
     skip-large-objects
     cdc-low-level
     cdc-test-decoding
+    cdc-prune
     cdc-endpos-between-transaction
     cdc-filtering
+    cdc-message-handling
     cdc-wal2json
+    cdc-pgoutput
+    cdc-filtering-pgoutput
+    pgoutput-privileges
     follow-wal2json
+    follow-pgoutput
     follow-standby
     follow-9.6
     follow-data-only
     follow-target-reconnect
     endpos-in-multi-wal-txn
+    exclude-extension
     blob-snapshot-release
     follow-defer-indexes
+    fk-not-valid
+    defer-validate-fks
+    fk-partition-clone
+    follow-defer-validate-fks
+    follow-sequence-reset
+    copy-source-reconnect
+    index-target-terminate
+    resume-vacuum
 )
 
 run_test() {
