@@ -21,6 +21,13 @@
 
 typedef void (*log_LockFn)(void *udata, int lock);
 
+typedef struct LogField
+{
+	const char *key;
+	const char *value;
+	int number;
+} LogField;
+
 enum {
 	LOG_TRACE,
 	LOG_SQLITE,
@@ -45,6 +52,9 @@ enum {
 
 #define log_level(level, ...) log_log(level, __FILE__, __LINE__, __VA_ARGS__)
 
+#define log_fields(level, fields, count, ...) \
+	log_log_fields(level, __FILE__, __LINE__, fields, count, __VA_ARGS__)
+
 void log_set_udata(void *udata);
 void log_set_lock(log_LockFn fn);
 void log_set_fp(FILE *fp);
@@ -68,5 +78,10 @@ void log_replay_pending(int sink);
 
 void log_log(int level, const char *file, int line, const char *fmt, ...)
  	__attribute__((format(printf, 4, 5)));
+
+void log_log_fields(int level, const char *file, int line,
+					const LogField *fields, int fieldCount,
+					const char *fmt, ...)
+	__attribute__((format(printf, 6, 7)));
 
 #endif

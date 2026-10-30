@@ -43,7 +43,11 @@
 #endif
 
 static char * ConnectionTypeToString(ConnectionType connectionType);
-static void log_connection_error(PGconn *connection, int logLevel);
+static void log_connection_error(PGSQL *pgsql, int logLevel);
+static void log_pg_lines(int logLevel, PGSQL *pgsql, int backendPID,
+						 PGresult *result, const char *sqlstate,
+						 PQExpBuffer lines,
+						 const char *sql, const char *params);
 static void pgAutoCtlDefaultNoticeProcessor(void *arg, const char *message);
 static bool pgsql_retry_open_connection(PGSQL *pgsql);
 
@@ -53,7 +57,8 @@ static void pgsql_execute_log_error(PGSQL *pgsql,
 									PGresult *result,
 									const char *sql,
 									PQExpBuffer debugParameters,
-									void *context);
+									void *context,
+									bool messageLogged);
 
 static bool build_parameters_list(PQExpBuffer buffer,
 								  int paramCount,
@@ -452,15 +457,15 @@ pgsql_finish(PGSQL *pgsql)
  * log_connection_error logs the PQerrorMessage from the given connection.
  */
 static void
-log_connection_error(PGconn *connection, int logLevel)
+log_connection_error(PGSQL *pgsql, int logLevel)
 {
 	/* PQerrorMessage is then "connection pointer is NULL", not helpful */
-	if (connection == NULL)
+	if (pgsql->connection == NULL)
 	{
 		return;
 	}
 
-	char *message = PQerrorMessage(connection);
+	char *message = PQerrorMessage(pgsql->connection);
 	LinesBuffer lbuf = { 0 };
 
 	if (!splitLines(&lbuf, message))
@@ -469,19 +474,122 @@ log_connection_error(PGconn *connection, int logLevel)
 		return;
 	}
 
+	PQExpBuffer lines = createPQExpBuffer();
+
 	for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
 	{
 		char *line = lbuf.lines[lineNumber];
 
 		if (lineNumber == 0)
 		{
-			log_level(logLevel, "Connection to database failed: %s", line);
+			appendPQExpBuffer(lines, "Connection to database failed: %s\n", line);
 		}
 		else
 		{
-			log_level(logLevel, "%s", line);
+			appendPQExpBuffer(lines, "%s\n", line);
 		}
 	}
+
+	log_pg_lines(logLevel, pgsql, 0, NULL, NULL, lines, NULL, NULL);
+	destroyPQExpBuffer(lines);
+}
+
+
+static void
+log_pg_lines(int logLevel, PGSQL *pgsql, int backendPID,
+			 PGresult *result, const char *sqlstate,
+			 PQExpBuffer lines,
+			 const char *sql, const char *params)
+{
+	static const struct
+	{
+		const char *key;
+		int code;
+	}
+	diagFields[] = {
+		{ "sqlstate", PG_DIAG_SQLSTATE },
+		{ "pg_severity", PG_DIAG_SEVERITY_NONLOCALIZED },
+		{ "pg_message", PG_DIAG_MESSAGE_PRIMARY },
+		{ "pg_detail", PG_DIAG_MESSAGE_DETAIL },
+		{ "pg_hint", PG_DIAG_MESSAGE_HINT },
+		{ "pg_context", PG_DIAG_CONTEXT },
+		{ "pg_position", PG_DIAG_STATEMENT_POSITION },
+		{ "pg_schema", PG_DIAG_SCHEMA_NAME },
+		{ "pg_table", PG_DIAG_TABLE_NAME },
+		{ "pg_column", PG_DIAG_COLUMN_NAME },
+		{ "pg_constraint", PG_DIAG_CONSTRAINT_NAME }
+	};
+
+	if (lines == NULL || PQExpBufferBroken(lines) || lines->len == 0)
+	{
+		return;
+	}
+
+	LogField fields[20] = { 0 };
+	int count = 0;
+	char backendPIDString[16] = { 0 };
+
+	fields[count++] = (LogField) {
+		"origin", "postgres", 0
+	};
+
+	if (pgsql != NULL)
+	{
+		fields[count++] =
+			(LogField) {
+			"endpoint", ConnectionTypeToString(pgsql->connectionType), 0
+		};
+	}
+
+	if (backendPID > 0)
+	{
+		sformat(backendPIDString, sizeof(backendPIDString), "%d", backendPID);
+		fields[count++] = (LogField) {
+			"backend_pid", backendPIDString, 1
+		};
+	}
+
+	if (result != NULL)
+	{
+		for (int i = 0; i < sizeof(diagFields) / sizeof(diagFields[0]); i++)
+		{
+			char *value = PQresultErrorField(result, diagFields[i].code);
+
+			if (value != NULL)
+			{
+				fields[count++] = (LogField) {
+					diagFields[i].key, value, 0
+				};
+			}
+		}
+	}
+	else if (sqlstate != NULL && sqlstate[0] != '\0')
+	{
+		fields[count++] = (LogField) {
+			"sqlstate", sqlstate, 0
+		};
+	}
+
+	if (sql != NULL)
+	{
+		fields[count++] = (LogField) {
+			"query", sql, 0
+		};
+	}
+
+	if (params != NULL)
+	{
+		fields[count++] = (LogField) {
+			"params", params, 0
+		};
+	}
+
+	while (lines->len > 0 && lines->data[lines->len - 1] == '\n')
+	{
+		lines->data[--lines->len] = '\0';
+	}
+
+	log_fields(logLevel, fields, count, "%s", lines->data);
 }
 
 
@@ -578,7 +686,7 @@ pgsql_open_connection(PGSQL *pgsql)
 		{
 			INSTR_TIME_SET_CURRENT(pgsql->retryPolicy.connectTime);
 
-			(void) log_connection_error(pgsql->connection, LOG_ERROR);
+			(void) log_connection_error(pgsql, LOG_ERROR);
 
 			log_error("Failed to connect to %s database at \"%s\", "
 					  "see above for details",
@@ -659,7 +767,7 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 			INSTR_TIME_SET_CURRENT(duration);
 			INSTR_TIME_SUBTRACT(duration, pgsql->retryPolicy.startTime);
 
-			(void) log_connection_error(pgsql->connection, LOG_ERROR);
+			(void) log_connection_error(pgsql, LOG_ERROR);
 
 			log_error("Failed to connect to \"%s\" "
 					  "after %d attempts in %d ms, "
@@ -747,7 +855,7 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 						 * otherwise accept that this may happen as a transient
 						 * state.
 						 */
-						(void) log_connection_error(pgsql->connection, LOG_SQL);
+						(void) log_connection_error(pgsql, LOG_SQL);
 
 						log_sql("Failed to connect after successful ping");
 					}
@@ -851,7 +959,7 @@ pgsql_retry_open_connection(PGSQL *pgsql)
 	{
 		INSTR_TIME_SET_CURRENT(pgsql->retryPolicy.connectTime);
 
-		(void) log_connection_error(pgsql->connection, LOG_ERROR);
+		(void) log_connection_error(pgsql, LOG_ERROR);
 		pgsql->status = PG_CONNECTION_BAD;
 		pgsql_finish(pgsql);
 
@@ -1515,6 +1623,11 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 	bool done = false;
 	int errors = 0;
 
+	char previousSqlstate[SQLSTATE_LENGTH] = { 0 };
+
+	strlcpy(previousSqlstate, pgsql->sqlstate, sizeof(previousSqlstate));
+	pgsql->sqlstate[0] = '\0';
+
 	/* Don't fetch results in pipeline mode */
 	if (!pipelineMode)
 	{
@@ -1542,9 +1655,15 @@ pgsql_execute_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 	/*
 	 * 1 is returned if the command was successfully dispatched and 0 if not.
 	 */
+	if (sentQuery != 0 && errors == 0 && pgsql->sqlstate[0] == '\0')
+	{
+		strlcpy(pgsql->sqlstate, previousSqlstate, sizeof(pgsql->sqlstate));
+	}
+
 	if (sentQuery == 0 || errors > 0)
 	{
-		pgsql_execute_log_error(pgsql, NULL, sql, debugParameters, context);
+		pgsql_execute_log_error(pgsql, NULL, sql, debugParameters, context,
+								errors > 0);
 		destroyPQExpBuffer(debugParameters);
 
 		/*
@@ -1647,24 +1766,28 @@ pgsql_send_with_params(PGSQL *pgsql, const char *sql, int paramCount,
 			return false;
 		}
 
-		/*
-		 * PostgreSQL Error message might contain several lines. Log each of
-		 * them as a separate ERROR line here.
-		 */
+		PQExpBuffer lines = createPQExpBuffer();
+		int backendPID = PQbackendPID(pgsql->connection);
+
 		for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
 		{
-			log_error("[%s %d] %s",
-					  endpoint,
-					  PQbackendPID(pgsql->connection),
-					  lbuf.lines[lineNumber]);
+			appendPQExpBuffer(lines, "[%s %d] %s\n",
+							  endpoint,
+							  backendPID,
+							  lbuf.lines[lineNumber]);
 		}
 
 		if (pgsql->logSQL)
 		{
-			log_error("SQL query: %s", sql);
-			log_error("SQL params: %s", debugParameters->data);
+			appendPQExpBuffer(lines, "SQL query: %s\n", sql);
+			appendPQExpBuffer(lines, "SQL params: %s\n", debugParameters->data);
 		}
 
+		log_pg_lines(LOG_ERROR, pgsql, backendPID, NULL, NULL, lines,
+					 pgsql->logSQL ? sql : NULL,
+					 pgsql->logSQL ? debugParameters->data : NULL);
+
+		destroyPQExpBuffer(lines);
 		destroyPQExpBuffer(debugParameters);
 		clear_results(pgsql);
 
@@ -1768,7 +1891,7 @@ pgsql_fetch_results(PGSQL *pgsql, bool *done,
 
 			if (!is_response_ok(result))
 			{
-				pgsql_execute_log_error(pgsql, result, NULL, NULL, context);
+				pgsql_execute_log_error(pgsql, result, NULL, NULL, context, false);
 				return false;
 			}
 
@@ -2127,7 +2250,7 @@ pgsql_prepare(PGSQL *pgsql, const char *name, const char *sql,
 
 	if (!ok)
 	{
-		pgsql_execute_log_error(pgsql, result, sql, NULL, NULL);
+		pgsql_execute_log_error(pgsql, result, sql, NULL, NULL, false);
 
 		/*
 		 * Multi statements might want to ROLLBACK and hold to the open
@@ -2235,7 +2358,8 @@ pgsql_execute_prepared(PGSQL *pgsql, const char *name,
 		char sql[BUFSIZE] = { 0 };
 		sformat(sql, sizeof(sql), "EXECUTE %s;", name);
 
-		pgsql_execute_log_error(pgsql, result, sql, debugParameters, context);
+		pgsql_execute_log_error(pgsql, result, sql, debugParameters, context,
+								false);
 		destroyPQExpBuffer(debugParameters);
 
 		/*
@@ -2281,7 +2405,8 @@ pgsql_execute_log_error(PGSQL *pgsql,
 						PGresult *result,
 						const char *sql,
 						PQExpBuffer debugParameters,
-						void *context)
+						void *context,
+						bool messageLogged)
 {
 	char *sqlstate = NULL;
 
@@ -2308,12 +2433,10 @@ pgsql_execute_log_error(PGSQL *pgsql,
 	 */
 	int backendPID = pgsql->connection ? PQbackendPID(pgsql->connection) : 0;
 
-	if (pgsql->connection != NULL)
+	PQExpBuffer lines = createPQExpBuffer();
+
+	if (pgsql->connection != NULL && !messageLogged)
 	{
-		/*
-		 * PostgreSQL Error message might contain several lines. Log each of
-		 * them as a separate ERROR line here.
-		 */
 		char *message = PQerrorMessage(pgsql->connection);
 
 		LinesBuffer lbuf = { 0 };
@@ -2334,38 +2457,48 @@ pgsql_execute_log_error(PGSQL *pgsql,
 
 		if (!splitLines(&lbuf, message))
 		{
-			/* errors have already been logged */
+			destroyPQExpBuffer(lines);
 			return;
 		}
 
 		for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
 		{
-			log_error("[%s %d] %s",
-					  endpoint,
-					  backendPID,
-					  lbuf.lines[lineNumber]);
+			appendPQExpBuffer(lines, "[%s %d] %s\n",
+							  endpoint,
+							  backendPID,
+							  lbuf.lines[lineNumber]);
 		}
 	}
+
+	const char *loggedSQL = NULL;
+	const char *loggedParams = NULL;
 
 	if (pgsql->logSQL)
 	{
 		/* when using send/fetch async queries, fetch doesn't have the sql */
 		if (sql != NULL)
 		{
-			log_error("[%s %d] SQL query: %s",
-					  endpoint,
-					  backendPID,
-					  sql);
+			appendPQExpBuffer(lines, "[%s %d] SQL query: %s\n",
+							  endpoint,
+							  backendPID,
+							  sql);
+			loggedSQL = sql;
 		}
 
 		if (debugParameters != NULL)
 		{
-			log_error("[%s %d] SQL params: %s",
-					  endpoint,
-					  backendPID,
-					  debugParameters->data);
+			appendPQExpBuffer(lines, "[%s %d] SQL params: %s\n",
+							  endpoint,
+							  backendPID,
+							  debugParameters->data);
+			loggedParams = debugParameters->data;
 		}
 	}
+
+	log_pg_lines(LOG_ERROR, pgsql, backendPID, result,
+				 messageLogged ? pgsql->sqlstate : NULL, lines,
+				 loggedSQL, loggedParams);
+	destroyPQExpBuffer(lines);
 
 	/* now stash away the SQL STATE if any */
 	if (context && sqlstate)
@@ -2643,10 +2776,16 @@ clear_results(PGSQL *pgsql)
 				return false;
 			}
 
+			PQExpBuffer lines = createPQExpBuffer();
+
 			for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
 			{
-				log_error("[Postgres] %s", lbuf.lines[lineNumber]);
+				appendPQExpBuffer(lines, "[Postgres] %s\n", lbuf.lines[lineNumber]);
 			}
+
+			log_pg_lines(LOG_ERROR, pgsql, PQbackendPID(connection), result,
+						 NULL, lines, NULL, NULL);
+			destroyPQExpBuffer(lines);
 
 			PQclear(result);
 			pgsql_finish(pgsql);
@@ -3308,33 +3447,35 @@ pgcopy_log_error(PGSQL *pgsql, PGresult *res, const char *context)
 	char *endpoint =
 		pgsql->connectionType == PGSQL_CONN_SOURCE ? "SOURCE" : "TARGET";
 
-	/*
-	 * PostgreSQL Error message might contain several lines. Log each of
-	 * them as a separate ERROR line here.
-	 */
+	PQExpBuffer lines = createPQExpBuffer();
+	int backendPID = PQbackendPID(pgsql->connection);
+
 	for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
 	{
 		if (lineNumber == 0 && res != NULL)
 		{
-			log_error("[%s %d] [%s] %s",
-					  endpoint,
-					  PQbackendPID(pgsql->connection),
-					  pgsql->sqlstate,
-					  lbuf.lines[lineNumber]);
+			appendPQExpBuffer(lines, "[%s %d] [%s] %s\n",
+							  endpoint,
+							  backendPID,
+							  pgsql->sqlstate,
+							  lbuf.lines[lineNumber]);
 		}
 		else
 		{
-			log_error("[%s %d] %s",
-					  endpoint,
-					  PQbackendPID(pgsql->connection),
-					  lbuf.lines[lineNumber]);
+			appendPQExpBuffer(lines, "[%s %d] %s\n",
+							  endpoint,
+							  backendPID,
+							  lbuf.lines[lineNumber]);
 		}
 	}
 
-	log_error("[%s %d] Context: %s",
-			  endpoint,
-			  PQbackendPID(pgsql->connection),
-			  context);
+	appendPQExpBuffer(lines, "[%s %d] Context: %s\n",
+					  endpoint,
+					  backendPID,
+					  context);
+
+	log_pg_lines(LOG_ERROR, pgsql, backendPID, res, NULL, lines, NULL, NULL);
+	destroyPQExpBuffer(lines);
 
 	if (res != NULL)
 	{
@@ -4652,10 +4793,11 @@ static void
 pgsql_stream_log_error(PGSQL *pgsql, PGresult *res, const char *message)
 {
 	char *pqmessage = PQerrorMessage(pgsql->connection);
+	PQExpBuffer lines = createPQExpBuffer();
 
 	if (strcmp(pqmessage, "") == 0)
 	{
-		log_error("%s", message);
+		appendPQExpBuffer(lines, "%s\n", message);
 	}
 	else
 	{
@@ -4663,28 +4805,29 @@ pgsql_stream_log_error(PGSQL *pgsql, PGresult *res, const char *message)
 
 		if (!splitLines(&lbuf, pqmessage))
 		{
-			/* errors have already been logged */
+			destroyPQExpBuffer(lines);
 			return;
 		}
 
 		if (lbuf.count == 1)
 		{
-			log_error("%s: %s", message, lbuf.lines[0]);
+			appendPQExpBuffer(lines, "%s: %s\n", message, lbuf.lines[0]);
 		}
 		else
 		{
-			/*
-			 * PostgreSQL Error message contains several lines. Log each of
-			 * them as a separate ERROR line here.
-			 */
-			log_error("%s:", message);
+			appendPQExpBuffer(lines, "%s:\n", message);
 
 			for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
 			{
-				log_error("%s", lbuf.lines[lineNumber]);
+				appendPQExpBuffer(lines, "%s\n", lbuf.lines[lineNumber]);
 			}
 		}
 	}
+
+	int backendPID = pgsql->connection ? PQbackendPID(pgsql->connection) : 0;
+
+	log_pg_lines(LOG_ERROR, pgsql, backendPID, res, NULL, lines, NULL, NULL);
+	destroyPQExpBuffer(lines);
 
 	if (res != NULL)
 	{

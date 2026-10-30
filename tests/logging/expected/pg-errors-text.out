@@ -1,0 +1,16 @@
+TS PID INFO   FILE:LINE                Running pgcopydb version VERSION
+TS PID ERROR  FILE:LINE               [SOURCE BPID] ERROR:  sample error
+TS PID ERROR  FILE:LINE               [SOURCE BPID] DETAIL:  sample detail
+TS PID ERROR  FILE:LINE               [SOURCE BPID] HINT:  sample hint
+TS PID ERROR  FILE:LINE               [SOURCE BPID] CONTEXT:  PL/pgSQL function inline_code_block line 1 at RAISE
+TS PID ERROR  FILE:LINE               [SOURCE BPID] SQL query: do $$ begin raise exception 'sample error' using detail = 'sample detail', hint = 'sample hint'; end $$
+TS PID ERROR  FILE:LINE               [SOURCE BPID] SQL params: 
+TS PID ERROR  FILE:LINE               [SOURCE BPID] ERROR:  division by zero
+TS PID ERROR  FILE:LINE               [SOURCE BPID] SQL query: select $1::int / 0
+TS PID ERROR  FILE:LINE               [SOURCE BPID] SQL params: '42'
+TS PID ERROR  FILE:LINE               [SOURCE BPID] [42P01] ERROR:  relation "public.logging_does_not_exist" does not exist
+TS PID ERROR  FILE:LINE               [SOURCE BPID] Context: COPY public.logging_does_not_exist FROM stdin
+TS PID ERROR  FILE:LINE               Connection to database failed: connection to server at "127.0.0.1", port 1 failed: Connection refused
+TS PID ERROR  FILE:LINE               	Is the server running on that host and accepting TCP/IP connections?
+TS PID ERROR  FILE:LINE               Failed to connect to target database at "postgres://postgres@127.0.0.1:1/postgres?keepalives=1&keepalives_idle=10&keepalives_interval=10&keepalives_count=60", see above for details
+TS PID INFO   FILE:LINE        pg-errors done

@@ -976,6 +976,13 @@ Each record has the same keys as `PGCOPYDB_LOG_JSON`, plus these keys:
   `copy worker` or `follow transform`. Records from the main process do not
   have it.
 
+A Postgres error is one record in every JSON output, with the same text as
+the plain output in `message`. It has these keys when they are known:
+`origin` (`postgres`), `endpoint` (`source` or `target`), `backend_pid`,
+`sqlstate`, `pg_severity`, `pg_message`, `pg_detail`, `pg_hint`,
+`pg_context`, `pg_position`, `pg_schema`, `pg_table`, `pg_column`,
+`pg_constraint`, `query`, and `params`.
+
 The file gets INFO records and above, or more when you use `--verbose`,
 `--debug`, or `--trace`. Messages longer than 16 kB are cut. Set this variable
 to `off` to disable the file, or to a level name (`debug`, `notice`, `warn`,
