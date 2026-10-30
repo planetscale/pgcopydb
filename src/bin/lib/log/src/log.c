@@ -91,6 +91,9 @@ typedef struct LogRecord
 	const char *stderrTime;
 	const char *fileLine;
 	bool showLineNumber;
+	const LogField *fields;
+	int fieldCount;
+	bool prefixEachLine;
 } LogRecord;
 
 static struct
@@ -749,15 +752,37 @@ build_record(char *out, LogSink *sink, LogRecord *record,
 
 	if (sink->format == LOG_FORMAT_TEXT)
 	{
-		position = append_bytes(out, position, prefix, prefixLength);
-		position = append_bytes(out, position, record->message, messageLength);
+		size_t start = 0;
 
-		if (truncated)
-		{
-			position = append_string(out, position, LOG_TRUNCATED);
-		}
+		do {
+			size_t end = messageLength;
 
-		return append_string(out, position, "\n");
+			if (record->prefixEachLine)
+			{
+				const char *newline = memchr(record->message + start, '\n',
+											 messageLength - start);
+
+				if (newline != NULL)
+				{
+					end = newline - record->message;
+				}
+			}
+
+			position = append_bytes(out, position, prefix, prefixLength);
+			position = append_bytes(out, position,
+									record->message + start,
+									end - start);
+
+			if (end == messageLength && truncated)
+			{
+				position = append_string(out, position, LOG_TRUNCATED);
+			}
+
+			position = append_string(out, position, "\n");
+			start = end + 1;
+		} while (start <= messageLength);
+
+		return position;
 	}
 
 	position = append_string(out, position, "{\"timestamp\":\"");
@@ -782,6 +807,45 @@ build_record(char *out, LogSink *sink, LogRecord *record,
 	}
 
 	position = append_string(out, position, "\"");
+
+	for (int i = 0; i < record->fieldCount; i++)
+	{
+		const LogField *field = &(record->fields[i]);
+
+		if (field->key == NULL || field->value == NULL)
+		{
+			continue;
+		}
+
+		size_t valueLength = strlen(field->value);
+		bool valueTruncated = false;
+
+		if (sink->maxMessageSize > 0 && valueLength > sink->maxMessageSize)
+		{
+			valueLength = sink->maxMessageSize;
+			valueTruncated = true;
+		}
+
+		position = append_string(out, position, ",\"");
+		position = append_json(out, position, field->key, strlen(field->key));
+		position = append_string(out, position, "\":");
+
+		if (field->number && !valueTruncated)
+		{
+			position = append_bytes(out, position, field->value, valueLength);
+			continue;
+		}
+
+		position = append_string(out, position, "\"");
+		position = append_json(out, position, field->value, valueLength);
+
+		if (valueTruncated)
+		{
+			position = append_string(out, position, LOG_TRUNCATED);
+		}
+
+		position = append_string(out, position, "\"");
+	}
 
 	if (L.role[0] != '\0')
 	{
@@ -923,11 +987,49 @@ report_failed_sinks(void)
 }
 
 
+static void log_vlog(int level, const char *file, int line,
+					 const LogField *fields, int fieldCount,
+					 bool prefixEachLine, int savedErrno,
+					 const char *fmt, va_list args)
+	__attribute__((format(printf, 8, 0)));
+
+
 void
 log_log(int level, const char *file, int line, const char *fmt, ...)
 {
 	int savedErrno = errno;
+	va_list args;
 
+	va_start(args, fmt);
+	log_vlog(level, file, line, NULL, 0, false, savedErrno, fmt, args);
+	va_end(args);
+
+	errno = savedErrno;
+}
+
+
+void
+log_log_fields(int level, const char *file, int line,
+			   const LogField *fields, int fieldCount,
+			   const char *fmt, ...)
+{
+	int savedErrno = errno;
+	va_list args;
+
+	va_start(args, fmt);
+	log_vlog(level, file, line, fields, fieldCount, true, savedErrno, fmt, args);
+	va_end(args);
+
+	errno = savedErrno;
+}
+
+
+static void
+log_vlog(int level, const char *file, int line,
+		 const LogField *fields, int fieldCount,
+		 bool prefixEachLine, int savedErrno,
+		 const char *fmt, va_list args)
+{
 	if (fmt == NULL)
 	{
 		return;
@@ -945,15 +1047,14 @@ log_log(int level, const char *file, int line, const char *fmt, ...)
 		return;
 	}
 
-	va_list args;
+	va_list copy;
 
 	if (L.depth > 0)
 	{
-		va_start(args, fmt);
+		va_copy(copy, args);
 		errno = savedErrno;
-		log_nested(fmt, args);
-		va_end(args);
-		errno = savedErrno;
+		log_nested(fmt, copy);
+		va_end(copy);
 		return;
 	}
 
@@ -985,10 +1086,10 @@ log_log(int level, const char *file, int line, const char *fmt, ...)
 	char *message = messageStack;
 	size_t messageLength = 0;
 
-	va_start(args, fmt);
+	va_copy(copy, args);
 	errno = savedErrno;
-	int needed = pg_vsnprintf(messageStack, sizeof(messageStack), fmt, args);
-	va_end(args);
+	int needed = pg_vsnprintf(messageStack, sizeof(messageStack), fmt, copy);
+	va_end(copy);
 
 	if (needed < 0)
 	{
@@ -1002,10 +1103,10 @@ log_log(int level, const char *file, int line, const char *fmt, ...)
 	}
 	else if ((messageHeap = malloc(needed + 1)) != NULL)
 	{
-		va_start(args, fmt);
+		va_copy(copy, args);
 		errno = savedErrno;
-		(void) pg_vsnprintf(messageHeap, needed + 1, fmt, args);
-		va_end(args);
+		(void) pg_vsnprintf(messageHeap, needed + 1, fmt, copy);
+		va_end(copy);
 
 		message = messageHeap;
 		messageLength = needed;
@@ -1028,7 +1129,10 @@ log_log(int level, const char *file, int line, const char *fmt, ...)
 		.longTime = longTime,
 		.stderrTime = stderrTime,
 		.fileLine = fileLine,
-		.showLineNumber = L.showLineNumber || L.level <= LOG_DEBUG
+		.showLineNumber = L.showLineNumber || L.level <= LOG_DEBUG,
+		.fields = fields,
+		.fieldCount = fieldCount,
+		.prefixEachLine = prefixEachLine
 	};
 
 	char lineStack[LOG_STACK_BUFSIZE];
@@ -1086,6 +1190,4 @@ log_log(int level, const char *file, int line, const char *fmt, ...)
 	--L.depth;
 
 	report_failed_sinks();
-
-	errno = savedErrno;
 }

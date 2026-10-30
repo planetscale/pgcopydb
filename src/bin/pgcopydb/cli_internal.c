@@ -6,7 +6,9 @@
 #include "cli_root.h"
 #include "commandline.h"
 #include "defaults.h"
+#include "env_utils.h"
 #include "log.h"
+#include "pgsql.h"
 #include "string_utils.h"
 
 static void cli_internal_log_sample(int argc, char **argv);
@@ -23,16 +25,23 @@ static CommandLine log_stress_command =
 				 "<procs> <count> <size>", "", NULL, cli_internal_log_stress);
 
 static void cli_internal_log_extra(int argc, char **argv);
+static void cli_internal_pg_errors(int argc, char **argv);
 
 static CommandLine log_extra_command =
 	make_command("log-extra",
 				 "Write log records that the old logger could not write",
 				 "", "", NULL, cli_internal_log_extra);
 
+static CommandLine pg_errors_command =
+	make_command("pg-errors",
+				 "Cause Postgres errors on the source to show how they are logged",
+				 "", "", NULL, cli_internal_pg_errors);
+
 static CommandLine *internal_subcommands[] = {
 	&log_sample_command,
 	&log_stress_command,
 	&log_extra_command,
+	&pg_errors_command,
 	NULL
 };
 
@@ -105,6 +114,57 @@ cli_internal_log_extra(int argc, char **argv)
 	}
 
 	log_info("log-extra done");
+}
+
+
+static void
+cli_internal_pg_errors(int argc, char **argv)
+{
+	char pguri[MAXCONNINFO] = { 0 };
+
+	if (!get_env_copy(PGCOPYDB_SOURCE_PGURI, pguri, sizeof(pguri)))
+	{
+		log_fatal("Failed to read %s", PGCOPYDB_SOURCE_PGURI);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	PGSQL pgsql = { 0 };
+
+	if (!pgsql_init(&pgsql, pguri, PGSQL_CONN_SOURCE))
+	{
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	(void) pgsql_execute(&pgsql,
+						 "do $$ begin raise exception 'sample error' "
+						 "using detail = 'sample detail', hint = 'sample hint'; "
+						 "end $$");
+
+	const Oid paramTypes[1] = { INT4OID };
+	const char *paramValues[1] = { "42" };
+
+	(void) pgsql_execute_with_params(&pgsql, "select $1::int / 0",
+									 1, paramTypes, paramValues,
+									 NULL, NULL);
+
+	if (pgsql_open_connection(&pgsql) != NULL)
+	{
+		(void) pg_copy_from_stdin(&pgsql, "public.logging_does_not_exist");
+	}
+
+	PGSQL bad = { 0 };
+
+	if (!pgsql_init(&bad,
+					"postgres://postgres@127.0.0.1:1/postgres",
+					PGSQL_CONN_TARGET))
+	{
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	pgsql_set_retry_policy(&(bad.retryPolicy), 0, 0, 0, 0);
+	(void) pgsql_open_connection(&bad);
+
+	log_info("pg-errors done");
 }
 
 

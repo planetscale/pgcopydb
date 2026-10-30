@@ -15,7 +15,8 @@ normalize_text() {
               -e 's/^(\x1b\[[0-9;]*m)?[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+ [0-9]+ /TS PID /' \
               -e 's/(\x1b\[90m)?[A-Za-z_]+\.c:[0-9]+/\1FILE:LINE/' \
               -e 's/Running pgcopydb version .* from .*$/Running pgcopydb version VERSION/' \
-              -e 's/ipcrm -s [0-9]+/ipcrm -s N/'
+              -e 's/ipcrm -s [0-9]+/ipcrm -s N/' \
+              -e 's/\[(SOURCE|TARGET) [0-9]+\]/[\1 BPID]/g'
 }
 
 normalize_json() {
@@ -237,6 +238,45 @@ EOF
     return "${failed}"
 }
 
+pg_errors() {
+    local failed=0
+    local json="${results}/pg-errors.json"
+
+    pgcopydb internal pg-errors 2> "${results}/raw-pg-errors-text.out" || failed=1
+    normalize_text < "${results}/raw-pg-errors-text.out" > "${results}/pg-errors-text.out"
+
+    if ! diff -u "${expected}/pg-errors-text.out" "${results}/pg-errors-text.out"; then
+        echo "golden mismatch: pg-errors-text"
+        failed=1
+    fi
+
+    PGCOPYDB_LOG_JSON=true pgcopydb internal pg-errors 2> "${json}" || failed=1
+
+    expect_equal "pg errors json parses" "0" \
+                 "$(jq -c . "${json}" > /dev/null 2>&1; echo $?)" || failed=1
+
+    expect_equal "pg errors raise fields" "P0001|sample detail|sample hint|source" \
+                 "$(jq -r 'select(.sqlstate == "P0001" and .pg_message != null) | [.sqlstate, .pg_detail, .pg_hint, .endpoint] | join("|")' "${json}")" \
+        || failed=1
+
+    expect_equal "pg errors division logged once" "1" \
+                 "$(jq -c 'select(.pg_message == "division by zero")' "${json}" | wc -l)" || failed=1
+
+    expect_equal "pg errors query has sqlstate" "22012|'42'" \
+                 "$(jq -r 'select(.query == "select $1::int / 0") | [.sqlstate, .params] | join("|")' "${json}")" \
+        || failed=1
+
+    expect_equal "pg errors copy sqlstate" "42P01" \
+                 "$(jq -r 'select(.message | contains("logging_does_not_exist")) | .sqlstate' "${json}")" \
+        || failed=1
+
+    expect_equal "pg errors connection endpoint" "target" \
+                 "$(jq -r 'select(.message | startswith("Connection to database failed")) | .endpoint' "${json}")" \
+        || failed=1
+
+    return "${failed}"
+}
+
 sample_outputs
 
 if [ -n "${LOGTEST_GENERATE:-}" ]; then
@@ -258,6 +298,7 @@ done
 extra || failed=1
 quit || failed=1
 workdir || failed=1
+pg_errors || failed=1
 
 stress 16 2000 100 || failed=1
 stress 16 2000 3000 || failed=1
