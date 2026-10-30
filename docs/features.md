@@ -241,7 +241,7 @@ This behavior allows migrations to proceed through:
 **Warning logs**: when errors are tolerated, pgcopydb logs:
 
 ```
-WARN: pg_restore exited with code 1 but reported 2 ignored errors (within tolerance of 10)
+WARN: pg_restore exited with code 1 but reported 4 ignored errors, 2 failed statements (within tolerance of 10)
 WARN: Continuing despite pg_restore errors - please verify schema integrity
 ```
 

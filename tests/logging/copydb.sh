@@ -19,6 +19,11 @@ normalize_text() {
               -e 's/\[(SOURCE|TARGET) [0-9]+\]/[\1 BPID]/g'
 }
 
+golden_diff() {
+    diff -u <(sed -E 's/FILE:LINE +/FILE:LINE /' "$1") \
+            <(sed -E 's/FILE:LINE +/FILE:LINE /' "$2")
+}
+
 normalize_json() {
     sed -E \
         -e 's/"timestamp":"[^"]*"/"timestamp":"TS"/' \
@@ -245,7 +250,7 @@ pg_errors() {
     pgcopydb internal pg-errors 2> "${results}/raw-pg-errors-text.out" || failed=1
     normalize_text < "${results}/raw-pg-errors-text.out" > "${results}/pg-errors-text.out"
 
-    if ! diff -u "${expected}/pg-errors-text.out" "${results}/pg-errors-text.out"; then
+    if ! golden_diff "${expected}/pg-errors-text.out" "${results}/pg-errors-text.out"; then
         echo "golden mismatch: pg-errors-text"
         failed=1
     fi
@@ -277,6 +282,77 @@ pg_errors() {
     return "${failed}"
 }
 
+subprocess_lines() {
+    local failed=0
+    local text="${results}/lines-text.log"
+    local json="${results}/lines-json.log"
+    local script='
+        for i in $(seq 1 20); do
+            printf "pg_restore: warning: split line %d " "$i" >&2
+            head -c 3000 /dev/zero | tr "\0" x >&2
+            sleep 0.01
+            printf " END\n" >&2
+            printf "stdout line %d\n" "$i"
+        done
+        printf "no newline at end" >&2'
+
+    pgcopydb internal run-program /bin/bash -c "${script}" 2> "${text}" || failed=1
+
+    expect_equal "lines whole warnings" "20" \
+                 "$(grep -cE ' WARN +[^ ]+ +pg_restore: warning: split line [0-9]+ x{3000} END$' "${text}")" \
+        || failed=1
+
+    expect_equal "lines stdout" "20" \
+                 "$(grep -cE ' INFO +[^ ]+ +stdout line [0-9]+$' "${text}")" || failed=1
+
+    expect_equal "lines last line without newline" "1" \
+                 "$(grep -cE ' ERROR +[^ ]+ +no newline at end$' "${text}")" || failed=1
+
+    expect_equal "lines total" "42" \
+                 "$(grep -vc 'Running pgcopydb version' "${text}")" || failed=1
+
+    PGCOPYDB_LOG_JSON=true pgcopydb internal run-program /bin/bash -c "${script}" \
+        2> "${json}" || failed=1
+
+    expect_equal "lines origin" "41" \
+                 "$(jq -c 'select(.origin == "bash")' "${json}" | wc -l)" || failed=1
+
+    return "${failed}"
+}
+
+restore_tolerance() {
+    local failed=0
+    local src="${PGCOPYDB_SOURCE_PGURI%/*}/restore_src"
+    local dst="${PGCOPYDB_TARGET_PGURI%/*}/restore_dst"
+    local log="${results}/restore-tolerance.log"
+
+    psql -q -d "${PGCOPYDB_SOURCE_PGURI}" -c 'create role logging_reader'
+    psql -q -d "${PGCOPYDB_SOURCE_PGURI}" -c 'create database restore_src'
+    psql -q -d "${PGCOPYDB_TARGET_PGURI}" -c 'create database restore_dst'
+
+    psql -q -d "${src}" <<'EOF'
+do $$
+begin
+  for i in 1..8 loop
+    execute format('create table t%s(id int primary key)', i);
+    execute format('create policy p%s on t%s to logging_reader using (true)', i, i);
+  end loop;
+end
+$$;
+EOF
+
+    pgcopydb clone --source "${src}" --target "${dst}" \
+             --dir /tmp/restore-tolerance --restore-jobs 4 2> "${log}" || failed=1
+
+    grep -E 'ignored errors|errors ignored on restore' "${log}" || true
+
+    expect_equal "restore tolerance failed statements" "1" \
+                 "$(grep -cE 'reported [0-9]+ ignored errors, 8 failed statements \(within tolerance of 10\)' "${log}")" \
+        || failed=1
+
+    return "${failed}"
+}
+
 sample_outputs
 
 if [ -n "${LOGTEST_GENERATE:-}" ]; then
@@ -289,7 +365,7 @@ fi
 failed=0
 
 for f in stderr-text stderr-tty stderr-json file-text file-json; do
-    if ! diff -u "${expected}/${f}.out" "${results}/${f}.out"; then
+    if ! golden_diff "${expected}/${f}.out" "${results}/${f}.out"; then
         echo "golden mismatch: ${f}"
         failed=1
     fi
@@ -299,6 +375,8 @@ extra || failed=1
 quit || failed=1
 workdir || failed=1
 pg_errors || failed=1
+subprocess_lines || failed=1
+restore_tolerance || failed=1
 
 stress 16 2000 100 || failed=1
 stress 16 2000 3000 || failed=1

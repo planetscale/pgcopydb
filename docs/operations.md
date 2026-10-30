@@ -82,6 +82,13 @@ before it gives up. The default is 10. Raise it when you expect a known set of
 schema objects to fail on the target and you intend to fix them afterwards.
 Lower it to zero when you want the run to stop at the first surprise.
 
+With more than one restore job, `pg_restore` counts each failed item two times
+in its `errors ignored on restore` total. For example, 8 policies that fail
+because their role does not exist on the target are reported as 16 errors.
+pgcopydb compares the tolerance with the number of failed statements in the
+`pg_restore` output instead, and never with less than half of the reported
+total. The warning shows both numbers.
+
 ## Disk use during CDC
 
 `pgcopydb follow` writes the changes it receives to `.json` files and the SQL it

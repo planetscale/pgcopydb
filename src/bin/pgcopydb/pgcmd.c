@@ -1137,21 +1137,37 @@ pg_restore_db(PostgresPaths *pgPaths,
 		 * the schema but encountered ignorable errors (like extension version
 		 * mismatches). Check if the errors were actually ignored.
 		 */
-		int ignoredErrors = get_and_reset_ignored_restore_errors();
+		int reportedErrors = get_and_reset_ignored_restore_errors();
+		int failedStatements = count_failed_restore_statements(program.stdErr);
+		int ignoredErrors = reportedErrors;
+
+		if (options.jobs > 1 && reportedErrors > 0)
+		{
+			int lowerBound = (reportedErrors + 1) / 2;
+
+			ignoredErrors = failedStatements > lowerBound
+							? failedStatements
+							: lowerBound;
+		}
 
 		if (ignoredErrors > 0 && ignoredErrors <= options.restoreTolerance)
 		{
 			log_warn(
-				"pg_restore exited with code %d but reported %d ignored errors (within tolerance of %d)",
-				program.returnCode, ignoredErrors, options.restoreTolerance);
+				"pg_restore exited with code %d but reported %d ignored errors, "
+				"%d failed statements (within tolerance of %d)",
+				program.returnCode, reportedErrors, failedStatements,
+				options.restoreTolerance);
 			log_warn(
 				"Continuing despite pg_restore errors - please verify schema integrity");
 			return true;
 		}
 
 		log_error(
-			"Failed to run pg_restore: exit code %d (ignored errors: %d, tolerance: %d)",
+			"Failed to run pg_restore: exit code %d (ignored errors: %d, "
+			"failed statements: %d, counted errors: %d, tolerance: %d)",
 			program.returnCode,
+			reportedErrors,
+			failedStatements,
 			ignoredErrors,
 			options.restoreTolerance);
 

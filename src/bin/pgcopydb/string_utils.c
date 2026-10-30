@@ -555,62 +555,76 @@ static int lastIgnoredRestoreErrors = 0;
  * when running a pg_basebackup or vacuumdb command.
  */
 void
-processBufferCallback(const char *buffer, bool error)
+processBufferCallback(const char *program, const char *line, bool error)
 {
 	const char *warningPattern = "^(pg_dump: warning:|pg_restore: warning:|WARNING:)";
 	const char *debugPattern = "^(DEBUG:)";
-	LinesBuffer lbuf = { 0 };
 
-	if (!splitLines(&lbuf, (char *) buffer))
+	if (line == NULL || line[0] == '\0')
 	{
-		/* errors have already been logged */
 		return;
 	}
 
-	for (uint64_t lineNumber = 0; lineNumber < lbuf.count; lineNumber++)
+	char *matchWarning = regexp_first_match(line, warningPattern);
+	char *matchDebug = regexp_first_match(line, debugPattern);
+
+	int logLevel = error ? LOG_ERROR : LOG_INFO;
+
+	/* Parse "errors ignored on restore: N" from pg_restore */
+	if (strstr(line, "errors ignored on restore:") != NULL)
 	{
-		char *line = lbuf.lines[lineNumber];
-
-		if (strneq(line, ""))
+		const char *colon = strrchr(line, ':');
+		if (colon != NULL)
 		{
-			char *matchWarning = regexp_first_match(line, warningPattern);
-			char *matchDebug = regexp_first_match(line, debugPattern);
+			int count = 0;
 
-			int logLevel = error ? LOG_ERROR : LOG_INFO;
-
-			/* Parse "errors ignored on restore: N" from pg_restore */
-			if (strstr(line, "errors ignored on restore:") != NULL)
+			/* Skip whitespace after colon */
+			const char *numStart = colon + 1;
+			while (*numStart == ' ' || *numStart == '\t')
 			{
-				char *colon = strrchr(line, ':');
-				if (colon != NULL)
-				{
-					int count = 0;
-
-					/* Skip whitespace after colon */
-					char *numStart = colon + 1;
-					while (*numStart == ' ' || *numStart == '\t')
-					{
-						numStart++;
-					}
-					if (stringToInt(numStart, &count))
-					{
-						lastIgnoredRestoreErrors = count;
-					}
-				}
+				numStart++;
 			}
-
-			if (matchDebug != NULL)
+			if (stringToInt(numStart, &count))
 			{
-				logLevel = LOG_DEBUG;
+				lastIgnoredRestoreErrors = count;
 			}
-			else if (matchWarning != NULL)
-			{
-				logLevel = LOG_WARN;
-			}
-
-			log_level(logLevel, "%s", line);
 		}
 	}
+
+	if (matchDebug != NULL)
+	{
+		logLevel = LOG_DEBUG;
+	}
+	else if (matchWarning != NULL)
+	{
+		logLevel = LOG_WARN;
+	}
+
+	const char *origin = program == NULL ? NULL : strrchr(program, '/');
+	origin = origin == NULL ? program : origin + 1;
+
+	LogField fields[1] = {
+		{ "origin", origin, 0 }
+	};
+
+	log_fields(logLevel, fields, origin == NULL ? 0 : 1, "%s", line);
+}
+
+
+int
+count_failed_restore_statements(const char *output)
+{
+	const char *marker = "could not execute query:";
+	int count = 0;
+
+	for (const char *p = output;
+		 p != NULL && (p = strstr(p, marker)) != NULL;
+		 p += strlen(marker))
+	{
+		++count;
+	}
+
+	return count;
 }
 
 
