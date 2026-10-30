@@ -856,6 +856,20 @@ copydb_write_restore_list_hook(void *ctx, ArchiveContentItem *item)
 		log_notice("Skipping COMMENT ON POLICY \"%s\"", name);
 	}
 
+	if (specs->skipLargeObjects && item->desc == ARCHIVE_TAG_BLOB)
+	{
+		skip = true;
+		log_notice("Skipping BLOB \"%s\"", name);
+	}
+
+	if (specs->skipLargeObjects &&
+		item->isCompositeTag &&
+		item->tagType == ARCHIVE_TAG_TYPE_LARGE_OBJECT)
+	{
+		skip = true;
+		log_notice("Skipping %s ON LARGE OBJECT \"%s\"", item->description, name);
+	}
+
 	if (!skip && catOid == PG_NAMESPACE_OID)
 	{
 		bool exists = false;
