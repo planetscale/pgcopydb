@@ -46,6 +46,8 @@ typedef struct CopyFilePaths
 	char schemadir[MAXPGPATH];        /* /tmp/pgcopydb/schema */
 	char schemafile[MAXPGPATH];       /* /tmp/pgcopydb/schema.json */
 	char summaryfile[MAXPGPATH];      /* /tmp/pgcopydb/summary.json */
+	char logdir[MAXPGPATH];
+	char logfile[MAXPGPATH];
 
 	CDCPaths cdc;
 	ComparePaths compare;

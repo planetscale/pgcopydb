@@ -10,14 +10,14 @@
 
 #include <stdio.h>
 #include <stdarg.h>
+#include <stddef.h>
 
 #define LOG_VERSION "0.1.3"
 
 #define LOG_TFORMAT_LONG "%Y-%m-%d %H:%M:%S"
 #define LOG_TFORMAT_SHORT "%H:%M:%S"
 
-/* used for JSON logs format "log" message */
-#define LOG_BUFSIZE 2048
+#define LOG_LEVEL_FOLLOW -1
 
 typedef void (*log_LockFn)(void *udata, int lock);
 
@@ -48,6 +48,7 @@ enum {
 void log_set_udata(void *udata);
 void log_set_lock(log_LockFn fn);
 void log_set_fp(FILE *fp);
+void log_set_fd(int fd);
 void log_set_level(int level);
 int log_get_level(void);
 void log_set_quiet(int enable);
@@ -56,6 +57,14 @@ void log_use_json(int enable);
 void log_use_json_file(int enable);
 void log_show_file_line(int enable);
 void log_set_tformat(const char *tformat);
+void log_set_role(const char *role);
+void log_set_run_id(const char *runId);
+int log_level_from_name(const char *name);
+
+int log_add_sink(int fd, int json, int level, int followVerbose,
+				 size_t maxMessageSize);
+void log_set_sink_level(int sink, int level);
+void log_replay_pending(int sink);
 
 void log_log(int level, const char *file, int line, const char *fmt, ...)
  	__attribute__((format(printf, 4, 5)));

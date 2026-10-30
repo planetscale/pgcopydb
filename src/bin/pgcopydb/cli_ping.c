@@ -202,6 +202,9 @@ cli_ping(int argc, char **argv)
 	char *target = dsn->target_pguri;
 
 	/* ping both source and target databases concurrently */
+	fflush(stdout);
+	fflush(stderr);
+
 	pid_t sPid = fork();
 
 	switch (sPid)
@@ -259,6 +262,9 @@ cli_ping(int argc, char **argv)
 			break;
 		}
 	}
+
+	fflush(stdout);
+	fflush(stderr);
 
 	pid_t tPid = fork();
 

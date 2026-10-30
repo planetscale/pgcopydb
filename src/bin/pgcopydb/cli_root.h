@@ -62,4 +62,6 @@ extern CommandLine sentinel_commands;
 /* cli_compare.c */
 extern CommandLine compare_commands;
 
+extern CommandLine internal_commands;
+
 #endif  /* CLI_ROOT_H */

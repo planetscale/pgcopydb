@@ -724,6 +724,9 @@ cli_follow(int argc, char **argv)
 static bool
 start_clone_process(CopyDataSpec *copySpecs, pid_t *pid)
 {
+	fflush(stdout);
+	fflush(stderr);
+
 	/* now we can fork a sub-process to transform the current file */
 	pid_t fpid = fork();
 
@@ -990,6 +993,9 @@ start_follow_process(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs,
 
 		return true;
 	}
+
+	fflush(stdout);
+	fflush(stderr);
 
 	/* now we can fork a sub-process to transform the current file */
 	pid_t fpid = fork();

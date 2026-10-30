@@ -6,10 +6,13 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/msg.h>
+#include <sys/sem.h>
 #include <unistd.h>
 
 #include "postgres_fe.h"        /* pqsignal, portable sigaction wrapper */
 
+#include "copydb.h"
 #include "defaults.h"
 #include "lock_utils.h"
 #include "log.h"
@@ -100,9 +103,32 @@ catch_quit(int sig)
 void
 catch_quit_and_exit(int sig)
 {
-	/* default signal handler disposition is to core dump, we don't */
-	log_warn("SIGQUIT");
-	exit(EXIT_CODE_QUIT);
+	static const char message[] = "SIGQUIT received, exiting now\n";
+
+	(void) write(STDERR_FILENO, message, sizeof(message) - 1);
+
+	pid_t pid = getpid();
+
+	for (int i = system_res_array.count - 1; 0 <= i; i--)
+	{
+		SysVRes *res = &(system_res_array.array[i]);
+
+		if (res->unlinked)
+		{
+			continue;
+		}
+
+		if (res->kind == SYSV_QUEUE && res->res.queue.owner == pid)
+		{
+			(void) msgctl(res->res.queue.qId, IPC_RMID, NULL);
+		}
+		else if (res->kind == SYSV_SEMAPHORE && res->res.semaphore.owner == pid)
+		{
+			(void) semctl(res->res.semaphore.semId, 0, IPC_RMID);
+		}
+	}
+
+	_exit(EXIT_CODE_QUIT);
 }
 
 

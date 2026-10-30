@@ -401,27 +401,23 @@ void
 semaphore_log_lock_function(void *udata, int mode)
 {
 	Semaphore *semaphore = (Semaphore *) udata;
-
-	/*
-	 * If locking/unlocking fails for some weird reason, we still want to log.
-	 * It's not so bad that we want to completely quit the program.
-	 * That's why we ignore the return values of semaphore_unlock and
-	 * semaphore_lock.
-	 */
+	static bool acquired = false;
 
 	switch (mode)
 	{
-		/* unlock */
 		case 0:
 		{
-			(void) semaphore_unlock(semaphore);
+			if (acquired)
+			{
+				(void) semaphore_unlock(semaphore);
+				acquired = false;
+			}
 			break;
 		}
 
-		/* lock */
 		case 1:
 		{
-			(void) semaphore_lock(semaphore);
+			acquired = semaphore_lock(semaphore);
 			break;
 		}
 
