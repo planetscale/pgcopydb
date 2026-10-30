@@ -4199,7 +4199,9 @@ schema_list_partitions(PGSQL *pgsql,
 			partsCount = splitMaxParts;
 		}
 
-		partsSize = ceil((double) (max - min + 1) / partsCount);
+		int64_t rangeCount = partsCount > 1 ? partsCount - 1 : 1;
+
+		partsSize = ceil((double) (max - min + 1) / rangeCount);
 	}
 
 	/*
