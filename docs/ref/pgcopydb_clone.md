@@ -970,11 +970,11 @@ A `--restart` run removes it with the rest of the work directory.
 
 Each record has the same keys as `PGCOPYDB_LOG_JSON`, plus these keys:
 
-  - `run_id` identifies one pgcopydb command: the main process ID and its
-    start time.
-  - `role` is the process title without the `pgcopydb: ` prefix, for example
-    `copy worker` or `follow transform`. Records from the main process do not
-    have it.
+- `run_id` identifies one pgcopydb command: the main process ID and its
+  start time.
+- `role` is the process title without the `pgcopydb:` prefix, for example
+  `copy worker` or `follow transform`. Records from the main process do not
+  have it.
 
 The file gets INFO records and above, or more when you use `--verbose`,
 `--debug`, or `--trace`. Messages longer than 16 kB are cut. Set this variable
