@@ -1285,6 +1285,11 @@ init_ps_buffer(int argc, char **argv)
 void
 set_ps_title(const char *title)
 {
+	const char *prefix = "pgcopydb: ";
+
+	log_set_role(strncmp(title, prefix, strlen(prefix)) == 0 ?
+				 title + strlen(prefix) : title);
+
 	if (ps_buffer == NULL)
 	{
 		/* noop */

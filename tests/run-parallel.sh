@@ -41,7 +41,7 @@ export -f run_with_timeout
 export TIMEOUT_CMD
 
 # ── Tier 2: Smoke tests (run first, fast) ────────────────────────────────────
-TIER2=(unit)
+TIER2=(unit logging)
 # tests/ci is just banned.h.sh - not container-based, skip for now
 
 # ── Tier 3: Integration tests (same matrix as GH Actions) ───────────────────

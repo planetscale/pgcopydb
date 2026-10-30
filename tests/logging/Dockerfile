@@ -1,0 +1,9 @@
+FROM pagila
+
+WORKDIR /usr/src/pgcopydb
+COPY ./copydb.sh copydb.sh
+COPY ./expected ./test/expected
+
+USER docker
+WORKDIR /usr/src/pgcopydb/test/
+CMD ["/usr/src/pgcopydb/copydb.sh"]

@@ -4,8 +4,10 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <strings.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -22,6 +24,8 @@
 #include "signals.h"
 #include "string_utils.h"
 #include "summary.h"
+
+static bool copydb_open_workdir_log(CopyFilePaths *cfPaths);
 
 
 /* Postgres 9.5 does not have idle_in_transaction_session_timeout */
@@ -154,6 +158,7 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 		cfPaths->schemadir,
 		cfPaths->cdc.dir,
 		cfPaths->compare.dir,
+		cfPaths->logdir,
 		NULL
 	};
 
@@ -165,6 +170,76 @@ copydb_init_workdir(CopyDataSpec *copySpecs,
 			return false;
 		}
 	}
+
+	if (service && !copydb_open_workdir_log(cfPaths))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+
+static bool
+copydb_open_workdir_log(CopyFilePaths *cfPaths)
+{
+	static int workdirLogSink = -1;
+
+	if (workdirLogSink >= 0)
+	{
+		return true;
+	}
+
+	char setting[BUFSIZE] = { 0 };
+
+	if (!get_env_copy_with_fallback(PGCOPYDB_LOG_WORKDIR,
+									setting,
+									sizeof(setting),
+									"info"))
+	{
+		return false;
+	}
+
+	if (strcasecmp(setting, "off") == 0)
+	{
+		log_replay_pending(-1);
+		return true;
+	}
+
+	int level = log_level_from_name(setting);
+
+	if (level < 0)
+	{
+		log_fatal("Failed to parse %s value \"%s\", "
+				  "expected \"off\" or a log level name",
+				  PGCOPYDB_LOG_WORKDIR,
+				  setting);
+		return false;
+	}
+
+	int fd = open(cfPaths->logfile,
+				  O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC,
+				  0644);
+
+	if (fd < 0)
+	{
+		log_warn("Failed to open log file \"%s\": %m", cfPaths->logfile);
+		log_replay_pending(-1);
+		return true;
+	}
+
+	workdirLogSink = log_add_sink(fd, true, level, true,
+								  WORKDIR_LOG_MAX_MESSAGE_SIZE);
+
+	if (workdirLogSink < 0)
+	{
+		log_warn("Failed to add log file \"%s\"", cfPaths->logfile);
+		(void) close(fd);
+		log_replay_pending(-1);
+		return true;
+	}
+
+	log_replay_pending(workdirLogSink);
 
 	return true;
 }
@@ -320,6 +395,9 @@ copydb_prepare_filepaths(CopyFilePaths *cfPaths,
 
 	/* prepare also the name of the summary file (JSON) */
 	sformat(cfPaths->summaryfile, MAXPGPATH, "%s/summary.json", cfPaths->topdir);
+
+	sformat(cfPaths->logdir, MAXPGPATH, "%s/log", cfPaths->topdir);
+	sformat(cfPaths->logfile, MAXPGPATH, "%s/pgcopydb.jsonl", cfPaths->logdir);
 
 	/*
 	 * Now prepare the Change Data Capture (logical decoding) intermediate

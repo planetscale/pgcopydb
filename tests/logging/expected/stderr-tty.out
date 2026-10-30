@@ -1,0 +1,18 @@
+TS PID [32mINFO  [0m Running pgcopydb version VERSION
+TS PID [90mTRACE [0m [90mFILE:LINE        [0m level sample: trace
+TS PID [30mSQLite[0m [90mFILE:LINE        [0m level sample: sqlite
+TS PID [34mDEBUG [0m [90mFILE:LINE        [0m level sample: debug
+TS PID [30mSQL   [0m [90mFILE:LINE        [0m level sample: sql
+TS PID [36mNOTICE[0m [90mFILE:LINE        [0m level sample: notice
+TS PID [32mINFO  [0m [90mFILE:LINE        [0m level sample: info
+TS PID [33mWARN  [0m [90mFILE:LINE        [0m level sample: warn
+TS PID [31mERROR [0m [90mFILE:LINE        [0m level sample: error
+TS PID [35mFATAL [0m [90mFILE:LINE        [0m level sample: fatal
+TS PID [32mINFO  [0m [90mFILE:LINE        [0m size sample 1500: mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm
+TS PID [31mERROR [0m [90mFILE:LINE        [0m errno sample: No such file or directory
+TS PID [33mWARN  [0m [90mFILE:LINE        [0m multi-line sample: line one
+line two
+TS PID [32mINFO  [0m [90mFILE:LINE        [0m json sample: "quoted" back\slash tab	here /path/to  end
+TS PID [32mINFO  [0m [90mFILE:LINE        [0m utf8 sample: café
+TS PID [36mNOTICE[0m [90mFILE:LINE        [0m log_level sample: 42
+TS PID [34mDEBUG [0m [90mFILE:LINE         [0m ipcrm -s N

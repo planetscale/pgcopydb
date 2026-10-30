@@ -10,7 +10,7 @@ export DOCKER
 
 BUILD_ARGS = --build-arg PGVERSION=$(PGVERSION)
 
-all: pagila pagila-multi-steps blobs unit filtering filtering-standby extensions \
+all: pagila pagila-multi-steps blobs unit logging filtering filtering-standby extensions \
 	 cdc-wal2json cdc-test-decoding cdc-endpos-between-transaction cdc-low-level \
 	 cdc-pgoutput cdc-filtering-pgoutput pgoutput-privileges \
 	 cdc-filtering \
@@ -34,6 +34,9 @@ blobs: build
 	$(MAKE) -C $@
 
 unit: build
+	$(MAKE) -C $@
+
+logging: build
 	$(MAKE) -C $@
 
 filtering: build
@@ -137,7 +140,7 @@ build:
 	$(DOCKER) build $(BUILD_ARGS) --build-arg PGCOPYDB_IMAGE=pgcopydb:pg$(PGVERSION) -t pagila -f Dockerfile.pagila .
 
 .PHONY: all build
-.PHONY: pagila pagila-multi-steps blobs unit filtering filtering-standby extensions
+.PHONY: pagila pagila-multi-steps blobs unit logging filtering filtering-standby extensions
 .PHONY: cdc-wal2json cdc-test-decoding cdc-low-level cdc-filtering cdc-prune
 .PHONY: cdc-pgoutput cdc-filtering-pgoutput follow-pgoutput
 .PHONY: follow-wal2json follow-standby follow-9.6 follow-target-reconnect

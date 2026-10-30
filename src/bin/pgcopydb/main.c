@@ -3,6 +3,7 @@
  *    Main entry point for the pgcopydb command-line tool
  */
 
+#include <fcntl.h>
 #include <getopt.h>
 #include <unistd.h>
 
@@ -34,7 +35,6 @@ char *ps_buffer;                /* will point to argv area */
 size_t ps_buffer_size;          /* space determined at run time */
 size_t last_status_len;         /* use to minimize length of clobber */
 
-FILE *logfp = NULL;
 Semaphore log_semaphore = { 0 }; /* allows inter-process locking */
 
 SysVResArray system_res_array = { 0 };
@@ -137,6 +137,16 @@ main(int argc, char **argv)
 			 VERSION_STRING,
 			 pgcopydb_program);
 
+	if (argc >= 2 && streq(argv[1], "internal"))
+	{
+		if (!commandline_run(&internal_commands, argc - 1, argv + 1))
+		{
+			exit(EXIT_CODE_BAD_ARGS);
+		}
+
+		return 0;
+	}
+
 	if (!commandline_run(&command, argc, argv))
 	{
 		exit(EXIT_CODE_BAD_ARGS);
@@ -218,6 +228,10 @@ set_logger()
 
 	log_set_tformat(log_time_format);
 
+	char runId[64] = { 0 };
+	sformat(runId, sizeof(runId), "%d-%lld", getpid(), (long long) time(NULL));
+	log_set_run_id(runId);
+
 	if (env_exists(PGCOPYDB_LOG_FILENAME))
 	{
 		char log_filename[MAXPGPATH] = { 0 };
@@ -228,9 +242,11 @@ set_logger()
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
-		logfp = fopen(log_filename, "w"); /* IGNORE-BANNED */
+		int logfd = open(log_filename,
+						 O_WRONLY | O_CREAT | O_TRUNC | O_APPEND | O_CLOEXEC,
+						 0644);
 
-		if (logfp == NULL)
+		if (logfd < 0)
 		{
 			fformat(stderr,
 					"Failed to open log file \"%s\": %m\n",
@@ -238,8 +254,8 @@ set_logger()
 			exit(EXIT_CODE_INTERNAL_ERROR);
 		}
 
-		log_set_fp(logfp);
 		log_use_json_file(logJSONFile);
+		log_set_fd(logfd);
 	}
 
 	/* initialize the semaphore used for locking log output */
@@ -263,17 +279,4 @@ static void
 unlink_system_res_atexit(void)
 {
 	(void) copydb_cleanup_sysv_resources(&system_res_array);
-
-	/*
-	 * close the log file after cleaning up System V resources. This ordering
-	 * is important because we want to log any errors that might happen during
-	 * System V resources clean-up.
-	 */
-	if (logfp != NULL)
-	{
-		if (fclose(logfp) != 0)
-		{
-			fformat(stderr, "Failed to close log file: %m\n");
-		}
-	}
 }

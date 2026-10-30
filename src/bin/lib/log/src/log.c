@@ -20,18 +20,29 @@
  * IN THE SOFTWARE.
  */
 
+#include <errno.h>
+#include <limits.h>
+#include <poll.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+#include <strings.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 
-#include "parson.h"
 #include "snprintf.h"
 
 #include "log.h"
+
+#define LOG_MAX_SINKS 8
+#define LOG_STACK_BUFSIZE 16384
+#define LOG_PENDING_SIZE 65536
+#define LOG_PENDING_MAX_MESSAGE 4096
+#define LOG_TRUNCATED " ... [truncated]"
 
 typedef enum
 {
@@ -39,18 +50,76 @@ typedef enum
 	LOG_FORMAT_JSON
 } logFormat;
 
-static struct {
-  void *udata;
-  log_LockFn lock;
-  FILE *fp;
-  int level;
-  int quiet;
-  int showLineNumber;
-  int useColors;
-  logFormat errFmt;
-  logFormat fpFmt;
-  char tformat[128];
-} L = { 0 };
+typedef enum
+{
+	LOG_STYLE_STDERR = 0,
+	LOG_STYLE_FILE
+} logStyle;
+
+typedef enum
+{
+	LOG_KIND_UNKNOWN = 0,
+	LOG_KIND_ATOMIC,
+	LOG_KIND_STREAM
+} logKind;
+
+typedef struct LogSink
+{
+	int fd;
+	logFormat format;
+	logStyle style;
+	logKind kind;
+	int level;
+	bool followVerbose;
+	bool runId;
+	size_t maxMessageSize;
+	bool enabled;
+	bool failed;
+	bool failureReported;
+	int failedErrno;
+} LogSink;
+
+typedef struct LogRecord
+{
+	int level;
+	const char *file;
+	int line;
+	int pid;
+	const char *message;
+	size_t messageLength;
+	const char *longTime;
+	const char *stderrTime;
+	const char *fileLine;
+	bool showLineNumber;
+} LogRecord;
+
+static struct
+{
+	void *udata;
+	log_LockFn lock;
+	int level;
+	int quiet;
+	int showLineNumber;
+	int useColors;
+	logFormat fileFormat;
+	int fileSink;
+	char tformat[128];
+	char role[64];
+	char runId[64];
+	int depth;
+	int sinkCount;
+	LogSink sinks[LOG_MAX_SINKS];
+	int pendingPid;
+	bool pendingClosed;
+	size_t pendingLength;
+	char pending[LOG_PENDING_SIZE];
+} L = {
+	.fileSink = -1,
+	.sinkCount = 1,
+	.sinks = {
+		{ .fd = STDERR_FILENO, .level = LOG_LEVEL_FOLLOW, .enabled = true }
+	}
+};
 
 
 static const char *level_names[] = {
@@ -66,242 +135,957 @@ static const char *level_names[] = {
 };
 
 static const char *level_colors[] = {
-  "\x1b[90m",					/* TRACE:  bright black (light gray) */
-  "\x1b[30m",					/* SQLite: black */
-  "\x1b[34m",					/* DEBUG:  blue */
-  "\x1b[30m",					/* SQL:    black */
-  "\x1b[36m",					/* NOTICE: cyan */
-  "\x1b[32m",					/* INFO:   green */
-  "\x1b[33m",					/* WARN:   yellow */
-  "\x1b[31m",					/* ERROR:  red */
-  "\x1b[35m"					/* FATAL:  magenta */
+	"\x1b[90m",
+	"\x1b[30m",
+	"\x1b[34m",
+	"\x1b[30m",
+	"\x1b[36m",
+	"\x1b[32m",
+	"\x1b[33m",
+	"\x1b[31m",
+	"\x1b[35m"
 };
 
 
-static void lock(void)   {
-  if (L.lock) {
-    L.lock(L.udata, 1);
-  }
+static int
+add_sink(int fd, logFormat format, logStyle style, int level, size_t maxMessageSize)
+{
+	if (L.sinkCount >= LOG_MAX_SINKS)
+	{
+		return -1;
+	}
+
+	L.sinks[L.sinkCount] = (LogSink) {
+		.fd = fd,
+		.format = format,
+		.style = style,
+		.level = level,
+		.maxMessageSize = maxMessageSize,
+		.enabled = true
+	};
+
+	return L.sinkCount++;
 }
 
 
-static void unlock(void) {
-  if (L.lock) {
-    L.lock(L.udata, 0);
-  }
+void
+log_set_udata(void *udata)
+{
+	L.udata = udata;
 }
 
 
-void log_set_udata(void *udata) {
-  L.udata = udata;
+void
+log_set_lock(log_LockFn fn)
+{
+	L.lock = fn;
 }
 
 
-void log_set_lock(log_LockFn fn) {
-  L.lock = fn;
+void
+log_set_fp(FILE *fp)
+{
+	log_set_fd(fp == NULL ? -1 : fileno(fp));
 }
 
 
-void log_set_fp(FILE *fp) {
-  L.fp = fp;
+void
+log_set_fd(int fd)
+{
+	if (fd < 0)
+	{
+		if (L.fileSink >= 0)
+		{
+			L.sinks[L.fileSink].enabled = false;
+		}
+		return;
+	}
+
+	if (L.fileSink >= 0)
+	{
+		L.sinks[L.fileSink] = (LogSink) {
+			.fd = fd,
+			.format = L.fileFormat,
+			.style = LOG_STYLE_FILE,
+			.level = LOG_LEVEL_FOLLOW,
+			.enabled = true
+		};
+		return;
+	}
+
+	L.fileSink = add_sink(fd, L.fileFormat, LOG_STYLE_FILE, LOG_LEVEL_FOLLOW, 0);
 }
 
 
-void log_set_level(int level) {
-  L.level = level;
+void
+log_set_level(int level)
+{
+	L.level = level;
 }
 
-int log_get_level(void) {
+
+int
+log_get_level(void)
+{
 	return L.level;
 }
 
 
-void log_set_quiet(int enable) {
-  L.quiet = enable ? 1 : 0;
-}
-
-
-void log_use_colors(int enable) {
-  L.useColors = enable ? 1 : 0;
-}
-
-
-void log_use_json(int enable) {
-  L.errFmt = enable ? LOG_FORMAT_JSON : LOG_FORMAT_TEXT;
-}
-
-
-void log_use_json_file(int enable) {
-  L.fpFmt = enable ? LOG_FORMAT_JSON : LOG_FORMAT_TEXT;
-}
-
-
-void log_show_file_line(int enable) {
-  L.showLineNumber = enable ? 1 : 0;
-}
-
-
-void log_set_tformat(const char *tformat) {
-  strlcpy(L.tformat, tformat, sizeof(L.tformat));
-}
-
-
-void log_log(int level, const char *file, int line, const char *fmt, ...)
+void
+log_set_quiet(int enable)
 {
-  struct timeval t;
-  struct tm *lt;
-
-  if (level < L.level) {
-    return;
-  }
-
-  if (fmt == NULL)
-  {
-	  return;
-  }
-
-  /* initialize L.tformat with default value, if necessary */
-  if (L.tformat[0] == '\0')
-  {
-	  strlcpy(L.tformat, LOG_TFORMAT_LONG, sizeof(L.tformat));
-  }
-
-  /* Acquire lock */
-  lock();
-
-  /* Get current time */
-  gettimeofday(&t, NULL);
-  lt = localtime(&t.tv_sec);
-
-  char *json_string = NULL;
-
-  /* Prepare JSON format if needed */
-  if ((!L.quiet && L.errFmt == LOG_FORMAT_JSON) ||
-	  (L.fp && L.fpFmt == LOG_FORMAT_JSON))
-  {
-	  JSON_Value *js = json_value_init_object();
-	  JSON_Object *jsobj = json_value_get_object(js);
+	L.quiet = enable ? 1 : 0;
+}
 
 
-	  char timebuf[32] = { 0 };
-	  char buf[128] = { 0 };
-	  /* always use the long time format when preparing JSON */
-	  timebuf[strftime(timebuf, sizeof(timebuf), LOG_TFORMAT_LONG, lt)] = '\0';
-	  snprintf(buf, sizeof(buf), "%s.%03d", timebuf, (int)t.tv_usec / 1000);
+void
+log_use_colors(int enable)
+{
+	L.useColors = enable ? 1 : 0;
+}
 
-	  /*
-	   * See Postgres docs for key names
-	   *
-	   * https://www.postgresql.org/docs/current/runtime-config-logging.html#RUNTIME-CONFIG-LOGGING-JSONLOG
-	   */
-	  json_object_set_string(jsobj, "timestamp", buf);
-	  json_object_set_number(jsobj, "pid", getpid());
-	  json_object_set_number(jsobj, "error_level", level);
-	  json_object_set_string(jsobj, "error_severity", level_names[level]);
-	  json_object_set_string(jsobj, "file_name", file);
-	  json_object_set_number(jsobj, "file_line_num", line);
 
-	  char log[LOG_BUFSIZE] = { 0 };
-	  va_list args;
+void
+log_use_json(int enable)
+{
+	L.sinks[0].format = enable ? LOG_FORMAT_JSON : LOG_FORMAT_TEXT;
+}
 
-	  va_start(args, fmt);
-	  pg_vsprintf(log, fmt, args);
-	  va_end(args);
 
-	  json_object_set_string(jsobj, "message", log);
+void
+log_use_json_file(int enable)
+{
+	L.fileFormat = enable ? LOG_FORMAT_JSON : LOG_FORMAT_TEXT;
 
-	  json_string = json_serialize_to_string(js);
-	  json_value_free(js);
-  }
-
-  /* max source filename is 20 chars long, max file lines is < 10000 (5) */
-  int showLineNumber = L.showLineNumber || L.level <= LOG_DEBUG;
-  char fileLine[25] = { 0 };
-
-  if (showLineNumber || (L.fp && L.fpFmt == LOG_FORMAT_TEXT))
-  {
-	  pg_snprintf(fileLine, sizeof(fileLine), "%s:%d", file, line);
-  }
-
-  /* Log to stderr */
-  if (!L.quiet)
-  {
-	if (L.errFmt == LOG_FORMAT_JSON)
+	if (L.fileSink >= 0)
 	{
-		pg_fprintf(stderr, "%s\n", json_string);
+		L.sinks[L.fileSink].format = L.fileFormat;
 	}
-	else if (L.errFmt == LOG_FORMAT_TEXT)
+}
+
+
+void
+log_show_file_line(int enable)
+{
+	L.showLineNumber = enable ? 1 : 0;
+}
+
+
+void
+log_set_tformat(const char *tformat)
+{
+	strlcpy(L.tformat, tformat, sizeof(L.tformat));
+}
+
+
+void
+log_set_role(const char *role)
+{
+	strlcpy(L.role, role == NULL ? "" : role, sizeof(L.role));
+}
+
+
+void
+log_set_run_id(const char *runId)
+{
+	strlcpy(L.runId, runId == NULL ? "" : runId, sizeof(L.runId));
+}
+
+
+int
+log_level_from_name(const char *name)
+{
+	for (int level = LOG_TRACE; level <= LOG_FATAL; level++)
 	{
-		char timebuf[32] = { 0 };
-		char buf[128] = { 0 };
-
-		timebuf[strftime(timebuf, sizeof(timebuf), L.tformat, lt)] = '\0';
-		snprintf(buf, sizeof(buf), "%s.%03d", timebuf, (int)t.tv_usec / 1000);
-
-		if (L.useColors)
+		if (strcasecmp(name, level_names[level]) == 0)
 		{
-			pg_fprintf(stderr, "%s %d %s%-6s\x1b[0m ",
-					   buf,
-					   getpid(),
-					   level_colors[level],
-					   level_names[level]);
+			return level;
+		}
+	}
 
-			if (showLineNumber)
-			{
-				pg_fprintf(stderr, "\x1b[90m%-25s\x1b[0m ", fileLine);
-			}
+	return -1;
+}
+
+
+int
+log_add_sink(int fd, int json, int level, int followVerbose,
+			 size_t maxMessageSize)
+{
+	int sink = add_sink(fd,
+						json ? LOG_FORMAT_JSON : LOG_FORMAT_TEXT,
+						LOG_STYLE_FILE,
+						level,
+						maxMessageSize);
+
+	if (sink >= 0)
+	{
+		L.sinks[sink].followVerbose = followVerbose != 0;
+		L.sinks[sink].runId = true;
+	}
+
+	return sink;
+}
+
+
+void
+log_set_sink_level(int sink, int level)
+{
+	if (sink >= 0 && sink < L.sinkCount)
+	{
+		L.sinks[sink].level = level;
+	}
+}
+
+
+static int
+sink_min_level(LogSink *sink)
+{
+	if (sink->level == LOG_LEVEL_FOLLOW)
+	{
+		return L.level;
+	}
+
+	if (sink->followVerbose && L.level < sink->level)
+	{
+		return L.level;
+	}
+
+	return sink->level;
+}
+
+
+static bool
+sink_accepts(int index, int level)
+{
+	LogSink *sink = &(L.sinks[index]);
+
+	if (!sink->enabled || sink->failed || (index == 0 && L.quiet))
+	{
+		return false;
+	}
+
+	return level >= sink_min_level(sink);
+}
+
+
+static bool
+pending_capturing(void)
+{
+	return !L.pendingClosed &&
+		   (L.pendingPid == 0 || L.pendingPid == (int) getpid());
+}
+
+
+static logKind
+sink_kind(LogSink *sink)
+{
+	if (sink->kind == LOG_KIND_UNKNOWN)
+	{
+		struct stat st;
+
+		if (fstat(sink->fd, &st) == 0 &&
+			(S_ISFIFO(st.st_mode) || S_ISSOCK(st.st_mode)))
+		{
+			sink->kind = LOG_KIND_STREAM;
 		}
 		else
 		{
-			pg_fprintf(stderr, "%s %d %-6s ", buf, getpid(), level_names[level]);
+			sink->kind = LOG_KIND_ATOMIC;
+		}
+	}
 
-			if (showLineNumber)
+	return sink->kind;
+}
+
+
+static bool
+write_all(int fd, const char *buffer, size_t length)
+{
+	int waits = 0;
+
+	while (length > 0)
+	{
+		ssize_t written = write(fd, buffer, length);
+
+		if (written > 0)
+		{
+			buffer += written;
+			length -= written;
+			continue;
+		}
+
+		if (written < 0 && errno == EINTR)
+		{
+			continue;
+		}
+
+		if (written < 0 &&
+			(errno == EAGAIN || errno == EWOULDBLOCK) &&
+			waits++ < 50)
+		{
+			struct pollfd pfd = { .fd = fd, .events = POLLOUT };
+
+			(void) poll(&pfd, 1, 100);
+			continue;
+		}
+
+		if (written == 0)
+		{
+			errno = EIO;
+		}
+
+		return false;
+	}
+
+	return true;
+}
+
+
+static void
+sink_write(LogSink *sink, const char *buffer, size_t length)
+{
+	bool locked = false;
+
+	if (length > PIPE_BUF &&
+		L.lock != NULL &&
+		sink_kind(sink) == LOG_KIND_STREAM)
+	{
+		L.lock(L.udata, 1);
+		locked = true;
+	}
+
+	bool success = write_all(sink->fd, buffer, length);
+	int writeErrno = errno;
+
+	if (locked)
+	{
+		L.lock(L.udata, 0);
+	}
+
+	if (!success)
+	{
+		sink->failed = true;
+		sink->failedErrno = writeErrno;
+	}
+}
+
+
+static size_t
+utf8_sequence_length(const unsigned char *string, size_t length)
+{
+	unsigned char c = string[0];
+	unsigned char low = 0x80;
+	unsigned char high = 0xBF;
+	size_t expected = 0;
+
+	if (c < 0x80)
+	{
+		return 1;
+	}
+	else if (c >= 0xC2 && c <= 0xDF)
+	{
+		expected = 2;
+	}
+	else if (c == 0xE0)
+	{
+		expected = 3;
+		low = 0xA0;
+	}
+	else if ((c >= 0xE1 && c <= 0xEC) || c == 0xEE || c == 0xEF)
+	{
+		expected = 3;
+	}
+	else if (c == 0xED)
+	{
+		expected = 3;
+		high = 0x9F;
+	}
+	else if (c == 0xF0)
+	{
+		expected = 4;
+		low = 0x90;
+	}
+	else if (c >= 0xF1 && c <= 0xF3)
+	{
+		expected = 4;
+	}
+	else if (c == 0xF4)
+	{
+		expected = 4;
+		high = 0x8F;
+	}
+	else
+	{
+		return 0;
+	}
+
+	if (length < expected || string[1] < low || string[1] > high)
+	{
+		return 0;
+	}
+
+	for (size_t i = 2; i < expected; i++)
+	{
+		if (string[i] < 0x80 || string[i] > 0xBF)
+		{
+			return 0;
+		}
+	}
+
+	return expected;
+}
+
+
+static size_t
+json_escape(char *out, const char *string, size_t length)
+{
+	const unsigned char *bytes = (const unsigned char *) string;
+	size_t written = 0;
+	size_t i = 0;
+
+	while (i < length)
+	{
+		unsigned char c = bytes[i];
+		const char *escape = NULL;
+		char unicode[8];
+		size_t consumed = 1;
+
+		switch (c)
+		{
+			case '"':
 			{
-				pg_fprintf(stderr, "%-25s ", fileLine);
+				escape = "\\\"";
+				break;
+			}
+
+			case '\\':
+			{
+				escape = "\\\\";
+				break;
+			}
+
+			case '/':
+			{
+				escape = "\\/";
+				break;
+			}
+
+			case '\b':
+			{
+				escape = "\\b";
+				break;
+			}
+
+			case '\f':
+			{
+				escape = "\\f";
+				break;
+			}
+
+			case '\n':
+			{
+				escape = "\\n";
+				break;
+			}
+
+			case '\r':
+			{
+				escape = "\\r";
+				break;
+			}
+
+			case '\t':
+			{
+				escape = "\\t";
+				break;
+			}
+
+			default:
+			{
+				if (c < 0x20)
+				{
+					snprintf(unicode, sizeof(unicode), "\\u%04x", c);
+					escape = unicode;
+				}
+				else if (c >= 0x80)
+				{
+					consumed = utf8_sequence_length(bytes + i, length - i);
+
+					if (consumed == 0)
+					{
+						escape = "\\ufffd";
+						consumed = 1;
+					}
+				}
+				break;
 			}
 		}
 
-		/* print the fmt, ... parts to the log stream now */
-		va_list args;
+		if (escape != NULL)
+		{
+			size_t escapeLength = strlen(escape);
 
-		va_start(args, fmt);
-		pg_vfprintf(stderr, fmt, args);
-		va_end(args);
-		pg_fprintf(stderr, "\n");
+			if (out != NULL)
+			{
+				memcpy(out + written, escape, escapeLength);
+			}
+			written += escapeLength;
+		}
+		else
+		{
+			if (out != NULL)
+			{
+				memcpy(out + written, string + i, consumed);
+			}
+			written += consumed;
+		}
+
+		i += consumed;
 	}
-  }
 
-  /* Log to file */
-  if (L.fp)
-  {
-	  if (L.fpFmt == LOG_FORMAT_JSON)
-	  {
-		pg_fprintf(L.fp, "%s\n", json_string);
-	  }
-	  else if (L.fpFmt == LOG_FORMAT_TEXT)
-	  {
-		  va_list args;
-		  char timebuf[32] = { 0 };
-		  char buf[128] = { 0 };
+	return written;
+}
 
-		  /* always use the long time format when preparing JSON */
-		  timebuf[strftime(timebuf, sizeof(timebuf), LOG_TFORMAT_LONG, lt)] = '\0';
-		  snprintf(buf, sizeof(buf), "%s.%03d", timebuf, (int)t.tv_usec / 1000);
 
-		  /* always add all the details when writting to file */
-		  pg_fprintf(L.fp, "%s %d %s %s ",
-					 buf, getpid(), level_names[level], fileLine);
+static size_t
+append_bytes(char *out, size_t position, const char *string, size_t length)
+{
+	if (out != NULL)
+	{
+		memcpy(out + position, string, length);
+	}
 
-		  va_start(args, fmt);
-		  pg_vfprintf(L.fp, fmt, args);
-		  va_end(args);
-		  pg_fprintf(L.fp, "\n");
-	  }
-  }
+	return position + length;
+}
 
-  /* time to free memory allocations */
-  json_free_serialized_string(json_string);
 
-  /* Release lock */
-  unlock();
+static size_t
+append_string(char *out, size_t position, const char *string)
+{
+	return append_bytes(out, position, string, strlen(string));
+}
+
+
+static size_t
+append_json(char *out, size_t position, const char *string, size_t length)
+{
+	return position + json_escape(out == NULL ? NULL : out + position,
+								  string,
+								  length);
+}
+
+
+static size_t
+append_int(char *out, size_t position, int value)
+{
+	char buffer[16];
+	int length = snprintf(buffer, sizeof(buffer), "%d", value);
+
+	return append_bytes(out, position, buffer, length);
+}
+
+
+static size_t
+build_text_prefix(char *out, size_t size, LogSink *sink, LogRecord *record)
+{
+	int length = 0;
+
+	if (sink->style == LOG_STYLE_FILE)
+	{
+		length = pg_snprintf(out, size, "%s %d %s %s ",
+							 record->longTime,
+							 record->pid,
+							 level_names[record->level],
+							 record->fileLine);
+	}
+	else if (L.useColors)
+	{
+		length = pg_snprintf(out, size, "%s %d %s%-6s\x1b[0m ",
+							 record->stderrTime,
+							 record->pid,
+							 level_colors[record->level],
+							 level_names[record->level]);
+
+		if (record->showLineNumber)
+		{
+			length += pg_snprintf(out + length, size - length,
+								  "\x1b[90m%-25s\x1b[0m ",
+								  record->fileLine);
+		}
+	}
+	else
+	{
+		length = pg_snprintf(out, size, "%s %d %-6s ",
+							 record->stderrTime,
+							 record->pid,
+							 level_names[record->level]);
+
+		if (record->showLineNumber)
+		{
+			length += pg_snprintf(out + length, size - length,
+								  "%-25s ",
+								  record->fileLine);
+		}
+	}
+
+	return length < 0 ? 0 : (size_t) length;
+}
+
+
+static size_t
+build_record(char *out, LogSink *sink, LogRecord *record,
+			 const char *prefix, size_t prefixLength)
+{
+	size_t messageLength = record->messageLength;
+	bool truncated = false;
+
+	if (sink->maxMessageSize > 0 && messageLength > sink->maxMessageSize)
+	{
+		messageLength = sink->maxMessageSize;
+		truncated = true;
+	}
+
+	size_t position = 0;
+
+	if (sink->format == LOG_FORMAT_TEXT)
+	{
+		position = append_bytes(out, position, prefix, prefixLength);
+		position = append_bytes(out, position, record->message, messageLength);
+
+		if (truncated)
+		{
+			position = append_string(out, position, LOG_TRUNCATED);
+		}
+
+		return append_string(out, position, "\n");
+	}
+
+	position = append_string(out, position, "{\"timestamp\":\"");
+	position = append_json(out, position, record->longTime,
+						   strlen(record->longTime));
+	position = append_string(out, position, "\",\"pid\":");
+	position = append_int(out, position, record->pid);
+	position = append_string(out, position, ",\"error_level\":");
+	position = append_int(out, position, record->level);
+	position = append_string(out, position, ",\"error_severity\":\"");
+	position = append_string(out, position, level_names[record->level]);
+	position = append_string(out, position, "\",\"file_name\":\"");
+	position = append_json(out, position, record->file, strlen(record->file));
+	position = append_string(out, position, "\",\"file_line_num\":");
+	position = append_int(out, position, record->line);
+	position = append_string(out, position, ",\"message\":\"");
+	position = append_json(out, position, record->message, messageLength);
+
+	if (truncated)
+	{
+		position = append_string(out, position, LOG_TRUNCATED);
+	}
+
+	position = append_string(out, position, "\"");
+
+	if (L.role[0] != '\0')
+	{
+		position = append_string(out, position, ",\"role\":\"");
+		position = append_json(out, position, L.role, strlen(L.role));
+		position = append_string(out, position, "\"");
+	}
+
+	if (sink->runId && L.runId[0] != '\0')
+	{
+		position = append_string(out, position, ",\"run_id\":\"");
+		position = append_json(out, position, L.runId, strlen(L.runId));
+		position = append_string(out, position, "\"");
+	}
+
+	return append_string(out, position, "}\n");
+}
+
+
+static void
+pending_capture(LogRecord *record, char *buffer, size_t size)
+{
+	LogSink jsonSink = {
+		.format = LOG_FORMAT_JSON,
+		.style = LOG_STYLE_FILE,
+		.runId = true,
+		.maxMessageSize = LOG_PENDING_MAX_MESSAGE
+	};
+
+	L.pendingPid = (int) getpid();
+
+	size_t length = build_record(NULL, &jsonSink, record, NULL, 0);
+
+	if (length + 1 > size ||
+		L.pendingLength + length + 1 > sizeof(L.pending))
+	{
+		L.pendingClosed = true;
+		return;
+	}
+
+	(void) build_record(buffer, &jsonSink, record, NULL, 0);
+
+	L.pending[L.pendingLength++] = (char) record->level;
+	memcpy(L.pending + L.pendingLength, buffer, length);
+	L.pendingLength += length;
+}
+
+
+void
+log_replay_pending(int index)
+{
+	if (index < 0 || index >= L.sinkCount || !pending_capturing())
+	{
+		L.pendingClosed = true;
+		return;
+	}
+
+	LogSink *sink = &(L.sinks[index]);
+	size_t position = 0;
+
+	while (position < L.pendingLength && !sink->failed)
+	{
+		int level = L.pending[position++];
+		const char *line = L.pending + position;
+		const char *end = memchr(line, '\n', L.pendingLength - position);
+
+		if (end == NULL)
+		{
+			break;
+		}
+
+		size_t length = end - line + 1;
+
+		if (level >= sink_min_level(sink))
+		{
+			sink_write(sink, line, length);
+		}
+
+		position += length;
+	}
+
+	L.pendingClosed = true;
+	L.pendingLength = 0;
+}
+
+
+static void
+format_time(char *out, size_t size, const char *tformat, struct tm *tm, int millis)
+{
+	char timebuf[32] = { 0 };
+
+	timebuf[strftime(timebuf, sizeof(timebuf), tformat, tm)] = '\0';
+	snprintf(out, size, "%s.%03d", timebuf, millis);
+}
+
+
+static void log_nested(const char *fmt, va_list args)
+	__attribute__((format(printf, 1, 0)));
+
+static void
+log_nested(const char *fmt, va_list args)
+{
+	char message[1024];
+	int length = pg_vsnprintf(message, sizeof(message) - 1, fmt, args);
+
+	if (length < 0)
+	{
+		return;
+	}
+
+	if ((size_t) length > sizeof(message) - 2)
+	{
+		length = sizeof(message) - 2;
+	}
+
+	message[length++] = '\n';
+	(void) write_all(STDERR_FILENO, message, length);
+}
+
+
+static void
+report_failed_sinks(void)
+{
+	for (int i = 0; i < L.sinkCount; i++)
+	{
+		LogSink *sink = &(L.sinks[i]);
+
+		if (sink->failed && !sink->failureReported)
+		{
+			sink->failureReported = true;
+
+			log_error("Failed to write to the log on fd %d: %s, "
+					  "process %d stops writing to it",
+					  sink->fd,
+					  strerror(sink->failedErrno),
+					  (int) getpid());
+		}
+	}
+}
+
+
+void
+log_log(int level, const char *file, int line, const char *fmt, ...)
+{
+	int savedErrno = errno;
+
+	if (fmt == NULL)
+	{
+		return;
+	}
+
+	bool accepted = pending_capturing();
+
+	for (int i = 0; i < L.sinkCount && !accepted; i++)
+	{
+		accepted = sink_accepts(i, level);
+	}
+
+	if (!accepted)
+	{
+		return;
+	}
+
+	va_list args;
+
+	if (L.depth > 0)
+	{
+		va_start(args, fmt);
+		errno = savedErrno;
+		log_nested(fmt, args);
+		va_end(args);
+		errno = savedErrno;
+		return;
+	}
+
+	++L.depth;
+
+	if (L.tformat[0] == '\0')
+	{
+		strlcpy(L.tformat, LOG_TFORMAT_LONG, sizeof(L.tformat));
+	}
+
+	struct timeval tv;
+	struct tm tm;
+
+	gettimeofday(&tv, NULL);
+	localtime_r(&(tv.tv_sec), &tm);
+
+	char longTime[128];
+	char stderrTime[128];
+	int millis = (int) tv.tv_usec / 1000;
+
+	format_time(longTime, sizeof(longTime), LOG_TFORMAT_LONG, &tm, millis);
+	format_time(stderrTime, sizeof(stderrTime), L.tformat, &tm, millis);
+
+	char fileLine[25] = { 0 };
+	pg_snprintf(fileLine, sizeof(fileLine), "%s:%d", file, line);
+
+	char messageStack[LOG_STACK_BUFSIZE];
+	char *messageHeap = NULL;
+	char *message = messageStack;
+	size_t messageLength = 0;
+
+	va_start(args, fmt);
+	errno = savedErrno;
+	int needed = pg_vsnprintf(messageStack, sizeof(messageStack), fmt, args);
+	va_end(args);
+
+	if (needed < 0)
+	{
+		messageLength = strlcpy(messageStack,
+								"Failed to format a log message",
+								sizeof(messageStack));
+	}
+	else if ((size_t) needed < sizeof(messageStack))
+	{
+		messageLength = needed;
+	}
+	else if ((messageHeap = malloc(needed + 1)) != NULL)
+	{
+		va_start(args, fmt);
+		errno = savedErrno;
+		(void) pg_vsnprintf(messageHeap, needed + 1, fmt, args);
+		va_end(args);
+
+		message = messageHeap;
+		messageLength = needed;
+	}
+	else
+	{
+		size_t keep = sizeof(messageStack) - sizeof(LOG_TRUNCATED);
+
+		memcpy(messageStack + keep, LOG_TRUNCATED, sizeof(LOG_TRUNCATED));
+		messageLength = keep + strlen(LOG_TRUNCATED);
+	}
+
+	LogRecord record = {
+		.level = level,
+		.file = file,
+		.line = line,
+		.pid = (int) getpid(),
+		.message = message,
+		.messageLength = messageLength,
+		.longTime = longTime,
+		.stderrTime = stderrTime,
+		.fileLine = fileLine,
+		.showLineNumber = L.showLineNumber || L.level <= LOG_DEBUG
+	};
+
+	char lineStack[LOG_STACK_BUFSIZE];
+
+	for (int i = 0; i < L.sinkCount; i++)
+	{
+		if (!sink_accepts(i, level))
+		{
+			continue;
+		}
+
+		LogSink *sink = &(L.sinks[i]);
+
+		char prefix[512];
+		size_t prefixLength = 0;
+
+		if (sink->format == LOG_FORMAT_TEXT)
+		{
+			prefixLength = build_text_prefix(prefix, sizeof(prefix), sink, &record);
+		}
+
+		size_t length = build_record(NULL, sink, &record, prefix, prefixLength);
+		char *lineHeap = NULL;
+		char *out = lineStack;
+
+		if (length > sizeof(lineStack))
+		{
+			lineHeap = malloc(length);
+			out = lineHeap;
+		}
+
+		if (out == NULL)
+		{
+			LogSink cut = *sink;
+
+			cut.maxMessageSize = sizeof(lineStack) / 8;
+			length = build_record(lineStack, &cut, &record, prefix, prefixLength);
+			sink_write(sink, lineStack, length);
+			continue;
+		}
+
+		(void) build_record(out, sink, &record, prefix, prefixLength);
+		sink_write(sink, out, length);
+
+		free(lineHeap);
+	}
+
+	if (pending_capturing())
+	{
+		pending_capture(&record, lineStack, sizeof(lineStack));
+	}
+
+	free(messageHeap);
+
+	--L.depth;
+
+	report_failed_sinks();
+
+	errno = savedErrno;
 }

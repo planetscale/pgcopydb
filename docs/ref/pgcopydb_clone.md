@@ -937,9 +937,9 @@ pgcopydb formats its logs using JSON.
 
 ```json
 {
-  "timestamp": "2026-04-13 16:53:14",
+  "timestamp": "2026-04-13 16:53:14.508",
   "pid": 87956,
-  "error_level": 4,
+  "error_level": 5,
   "error_severity": "INFO",
   "file_name": "main.c",
   "file_line_num": 165,
@@ -960,6 +960,30 @@ previous content would be lost when running the same command twice.
 
 When true (or *yes*, or *on*, or 1, same input as a Postgres boolean) then
 pgcopydb formats its logs using JSON when writing to PGCOPYDB_LOG_FILENAME.
+
+`PGCOPYDB_LOG_WORKDIR`
+
+When you set `--dir`, pgcopydb also writes its logs as JSON Lines to
+`<dir>/log/pgcopydb.jsonl`. The file is appended to, so a `--resume` run and
+other commands that use the same `--dir` add their records to the same file.
+A `--restart` run removes it with the rest of the work directory.
+
+Each record has the same keys as `PGCOPYDB_LOG_JSON`, plus these keys:
+
+- `run_id` identifies one pgcopydb command: the main process ID and its
+  start time.
+- `role` is the process title without the `pgcopydb:` prefix, for example
+  `copy worker` or `follow transform`. Records from the main process do not
+  have it.
+
+The file gets INFO records and above, or more when you use `--verbose`,
+`--debug`, or `--trace`. Messages longer than 16 kB are cut. Set this variable
+to `off` to disable the file, or to a level name (`debug`, `notice`, `warn`,
+`error`) to change the level. For example, to list the errors in the file:
+
+```bash
+jq -c 'select(.error_level >= 7)' /var/lib/pgcopydb/log/pgcopydb.jsonl
+```
 
 `XDG_DATA_HOME`
 
