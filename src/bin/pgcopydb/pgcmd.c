@@ -2050,6 +2050,29 @@ parse_archive_acl_or_comment(char *ptr, ArchiveContentItem *item)
 		sformat(item->restoreListName, bytes, "%s", extname);
 		item->tagType = ARCHIVE_TAG_TYPE_EXTENSION;
 	}
+	else if (token.desc == ARCHIVE_TAG_LARGE_OBJECT)
+	{
+		char *loid = token.ptr + 1;
+		char *space = strchr(loid, ' ');
+
+		if (space != NULL)
+		{
+			*space = '\0';
+		}
+
+		int bytes = strlen(loid) + 1;
+
+		item->restoreListName = (char *) calloc(bytes, sizeof(char));
+
+		if (item->restoreListName == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		sformat(item->restoreListName, bytes, "%s", loid);
+		item->tagType = ARCHIVE_TAG_TYPE_LARGE_OBJECT;
+	}
 	else if (token.desc == ARCHIVE_TAG_DEFAULT_ACL)
 	{
 		/*
