@@ -959,7 +959,24 @@ previous content would be lost when running the same command twice.
 `PGCOPYDB_LOG_JSON_FILE`
 
 When true (or *yes*, or *on*, or 1, same input as a Postgres boolean) then
-pgcopydb formats its logs using JSON when writing to PGCOPYDB_LOG_FILENAME.
+pgcopydb formats its logs using JSON when writing to PGCOPYDB_LOG_FILENAME
+and to PGCOPYDB_LOG_ERROR_FILENAME.
+
+`PGCOPYDB_LOG_FILE_LEVEL`
+
+Sets the lowest log level written to PGCOPYDB_LOG_FILENAME, for example
+`debug` or `warn`. By default the file uses the same level as the standard
+error output, which `--verbose`, `--debug`, `--trace`, and `--quiet` set.
+
+`PGCOPYDB_LOG_ERROR_FILENAME`
+
+When set to a filename, pgcopydb also writes its ERROR and FATAL records to
+that file. The file is appended to, so a `--resume` run keeps the errors of
+the earlier runs. For example:
+
+```bash
+export PGCOPYDB_LOG_ERROR_FILENAME=/var/log/pgcopydb/errors.log
+```
 
 `PGCOPYDB_LOG_WORKDIR`
 

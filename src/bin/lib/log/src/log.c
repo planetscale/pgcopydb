@@ -221,6 +221,16 @@ log_set_fd(int fd)
 
 
 void
+log_set_file_level(int level)
+{
+	if (L.fileSink >= 0)
+	{
+		L.sinks[L.fileSink].level = level;
+	}
+}
+
+
+void
 log_set_level(int level)
 {
 	L.level = level;

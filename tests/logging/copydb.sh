@@ -353,6 +353,39 @@ EOF
     return "${failed}"
 }
 
+log_files() {
+    local failed=0
+    local errors="${results}/errors.log"
+    local levelled="${results}/levelled.log"
+
+    PGCOPYDB_LOG_ERROR_FILENAME="${errors}" pgcopydb internal log-sample 2> /dev/null || failed=1
+
+    expect_equal "error file levels" "3" \
+                 "$(grep -cE '^[0-9-]+ [0-9:.]+ [0-9]+ (ERROR|FATAL) ' "${errors}")" || failed=1
+
+    expect_equal "error file only errors" "3" "$(wc -l < "${errors}")" || failed=1
+
+    PGCOPYDB_LOG_ERROR_FILENAME="${errors}" pgcopydb internal log-sample 2> /dev/null || failed=1
+    expect_equal "error file appends" "6" "$(wc -l < "${errors}")" || failed=1
+
+    PGCOPYDB_LOG_FILENAME="${levelled}" PGCOPYDB_LOG_FILE_LEVEL=warn \
+        pgcopydb internal log-sample 2> /dev/null || failed=1
+
+    expect_equal "file level warn and above" "5" \
+                 "$(grep -cE '^[0-9-]+ [0-9:.]+ [0-9]+ (WARN|ERROR|FATAL) ' "${levelled}")" || failed=1
+
+    expect_equal "file level below warn" "0" \
+                 "$(grep -cE '^[0-9-]+ [0-9:.]+ [0-9]+ (TRACE|SQLite|DEBUG|SQL|NOTICE|INFO) ' "${levelled}")" \
+        || failed=1
+
+    local rc=0
+    PGCOPYDB_LOG_FILENAME="${levelled}" PGCOPYDB_LOG_FILE_LEVEL=loud \
+        pgcopydb internal log-sample > /dev/null 2>&1 || rc=$?
+    expect_equal "file level invalid" "1" "${rc}" || failed=1
+
+    return "${failed}"
+}
+
 sample_outputs
 
 if [ -n "${LOGTEST_GENERATE:-}" ]; then
@@ -372,6 +405,7 @@ for f in stderr-text stderr-tty stderr-json file-text file-json; do
 done
 
 extra || failed=1
+log_files || failed=1
 quit || failed=1
 workdir || failed=1
 pg_errors || failed=1
