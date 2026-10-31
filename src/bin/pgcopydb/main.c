@@ -41,6 +41,8 @@ SysVResArray system_res_array = { 0 };
 
 static void set_logger(void);
 static void unlink_system_res_atexit(void);
+static int open_log_file(const char *envName, int flags);
+static int get_env_log_level(const char *envName);
 
 
 /*
@@ -234,28 +236,27 @@ set_logger()
 
 	if (env_exists(PGCOPYDB_LOG_FILENAME))
 	{
-		char log_filename[MAXPGPATH] = { 0 };
-
-		if (!get_env_copy(PGCOPYDB_LOG_FILENAME, log_filename, MAXPGPATH))
-		{
-			/* errors have already been logged */
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
-
-		int logfd = open(log_filename,
-						 O_WRONLY | O_CREAT | O_TRUNC | O_APPEND | O_CLOEXEC,
-						 0644);
-
-		if (logfd < 0)
-		{
-			fformat(stderr,
-					"Failed to open log file \"%s\": %m\n",
-					log_filename);
-			exit(EXIT_CODE_INTERNAL_ERROR);
-		}
+		int logfd = open_log_file(PGCOPYDB_LOG_FILENAME, O_TRUNC);
 
 		log_use_json_file(logJSONFile);
 		log_set_fd(logfd);
+
+		if (env_exists(PGCOPYDB_LOG_FILE_LEVEL))
+		{
+			log_set_file_level(get_env_log_level(PGCOPYDB_LOG_FILE_LEVEL));
+		}
+	}
+
+	if (env_exists(PGCOPYDB_LOG_ERROR_FILENAME))
+	{
+		int errorfd = open_log_file(PGCOPYDB_LOG_ERROR_FILENAME, 0);
+
+		if (log_add_sink(errorfd, logJSONFile, LOG_ERROR, false, 0) < 0)
+		{
+			fformat(stderr, "Failed to add the %s log file\n",
+					PGCOPYDB_LOG_ERROR_FILENAME);
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
 	}
 
 	/* initialize the semaphore used for locking log output */
@@ -275,6 +276,53 @@ set_logger()
  * registered in the global array during run-time. It is registered as an
  * atexit(3) facility.
  */
+static int
+open_log_file(const char *envName, int flags)
+{
+	char filename[MAXPGPATH] = { 0 };
+
+	if (!get_env_copy(envName, filename, MAXPGPATH))
+	{
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	int fd = open(filename, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | flags, 0644);
+
+	if (fd < 0)
+	{
+		fformat(stderr, "Failed to open log file \"%s\": %m\n", filename);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	return fd;
+}
+
+
+static int
+get_env_log_level(const char *envName)
+{
+	char name[BUFSIZE] = { 0 };
+
+	if (!get_env_copy(envName, name, sizeof(name)))
+	{
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	int level = log_level_from_name(name);
+
+	if (level < 0)
+	{
+		fformat(stderr,
+				"Failed to parse %s value \"%s\", expected a log level name\n",
+				envName,
+				name);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	return level;
+}
+
+
 static void
 unlink_system_res_atexit(void)
 {
