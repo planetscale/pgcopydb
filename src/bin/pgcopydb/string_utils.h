@@ -50,8 +50,9 @@ typedef struct LinesBuffer
 uint64_t countLines(char *buffer);
 bool splitLines(LinesBuffer *lbuf, char *buffer);
 
-void processBufferCallback(const char *buffer, bool error);
+void processBufferCallback(const char *program, const char *line, bool error);
 int get_and_reset_ignored_restore_errors(void);
+int count_failed_restore_statements(const char *output);
 
 void pretty_print_bytes(char *buffer, size_t size, uint64_t bytes);
 void pretty_print_bytes_per_second(char *buffer, size_t size, uint64_t bytes,

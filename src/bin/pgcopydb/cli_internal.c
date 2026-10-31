@@ -9,6 +9,7 @@
 #include "env_utils.h"
 #include "log.h"
 #include "pgsql.h"
+#include "runprogram.h"
 #include "string_utils.h"
 
 static void cli_internal_log_sample(int argc, char **argv);
@@ -26,6 +27,12 @@ static CommandLine log_stress_command =
 
 static void cli_internal_log_extra(int argc, char **argv);
 static void cli_internal_pg_errors(int argc, char **argv);
+static void cli_internal_run_program(int argc, char **argv);
+
+static CommandLine run_program_command =
+	make_command("run-program",
+				 "Run a program and log its output lines",
+				 "<program> [args...]", "", NULL, cli_internal_run_program);
 
 static CommandLine log_extra_command =
 	make_command("log-extra",
@@ -42,6 +49,7 @@ static CommandLine *internal_subcommands[] = {
 	&log_stress_command,
 	&log_extra_command,
 	&pg_errors_command,
+	&run_program_command,
 	NULL
 };
 
@@ -165,6 +173,41 @@ cli_internal_pg_errors(int argc, char **argv)
 	(void) pgsql_open_connection(&bad);
 
 	log_info("pg-errors done");
+}
+
+
+static void
+cli_internal_run_program(int argc, char **argv)
+{
+	if (argc < 1)
+	{
+		commandline_print_usage(&run_program_command, stderr);
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	char **args = (char **) calloc(argc + 1, sizeof(char *));
+
+	if (args == NULL)
+	{
+		log_fatal(ALLOCATION_FAILED_ERROR);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	for (int i = 0; i < argc; i++)
+	{
+		args[i] = argv[i];
+	}
+
+	Program program = { 0 };
+
+	(void) initialize_program(&program, args, false);
+	program.processBuffer = &processBufferCallback;
+
+	(void) execute_subprogram(&program);
+
+	log_info("run-program exit code %d, failed restore statements %d",
+			 program.returnCode,
+			 count_failed_restore_statements(program.stdErr));
 }
 
 

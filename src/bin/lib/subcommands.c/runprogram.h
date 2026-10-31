@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <errno.h>
+#include <poll.h>
 #include <string.h>
 #include <sys/wait.h>
 
@@ -23,6 +24,7 @@
  */
 #define BUFSIZE 1024
 #define ARGS_INCREMENT 12
+#define MAX_PARTIAL_LINE 65536
 
 #if defined(WIN32) && !defined(__CYGWIN__)
 #define DEV_NULL "NUL"
@@ -44,8 +46,8 @@ typedef struct
 	bool capture;               /* do we capture output, or redirect it? */
 	bool tty;					/* do we share our tty? */
 
-	/* register a function to process output as it appears */
-	void (*processBuffer)(const char *buffer, bool error);
+	/* register a function to process output lines as they appear */
+	void (*processBuffer)(const char *program, const char *line, bool error);
 
 	int stdOutFd;               /* redirect stdout to file descriptor */
 	int stdErrFd;               /* redirect stderr to file descriptor */
@@ -67,12 +69,19 @@ int snprintf_program_command_line(Program *prog, char *buffer, int size);
 static void exit_internal_error(void);
 static void dup2_or_exit(int fildes, int fildes2);
 static void close_or_exit(int fildes);
+typedef struct ProgramStream
+{
+	int fd;
+	bool error;
+	bool open;
+	PQExpBuffer captured;
+	PQExpBuffer partial;
+} ProgramStream;
+
 static void read_from_pipes(Program *prog,
 							pid_t childPid, int *outpipe, int *errpipe);
-static size_t read_into_buf(Program *prog,
-							int filedes,
-							PQExpBuffer buffer,
-							bool error);
+static bool read_into_buf(Program *prog, ProgramStream *stream);
+static void process_lines(Program *prog, ProgramStream *stream, bool atEOF);
 static void waitprogram(Program *prog, pid_t childPid);
 
 /*
@@ -288,9 +297,7 @@ execute_subprogram(Program *prog)
 			{
 				if (setsid() == -1)
 				{
-					prog->returnCode = -1;
-					prog->error = errno;
-					return;
+					(void) exit_internal_error();
 				}
 			}
 
@@ -478,109 +485,76 @@ close_or_exit(int fildes)
 static void
 read_from_pipes(Program *prog, pid_t childPid, int *outpipe, int *errpipe)
 {
-	bool doneReading = false;
-	int countFdsReadyToRead, nfds; /* see man select(3) */
-	fd_set readFileDescriptorSet;
-	ssize_t bytes_out = BUFSIZE, bytes_err = BUFSIZE;
-	PQExpBuffer outbuf, errbuf;
-
-	/* We read from the other side of the pipe, close that part.  */
 	close(outpipe[1]);
 	close(errpipe[1]);
 
-	nfds = MAX(outpipe[0], errpipe[0]) + 1;
+	ProgramStream streams[2] = {
+		{ .fd = outpipe[0], .error = false, .open = true },
+		{ .fd = errpipe[0], .error = true, .open = true }
+	};
 
-	/*
-	 * Ok. the child process is running, let's read the pipes content.
-	 */
-	outbuf = createPQExpBuffer();
-	errbuf = createPQExpBuffer();
-
-	while (!doneReading)
+	for (int i = 0; i < 2; i++)
 	{
-		FD_ZERO(&readFileDescriptorSet);
+		streams[i].captured = createPQExpBuffer();
+		streams[i].partial = createPQExpBuffer();
+	}
 
-		/* if we read 0 bytes on the previous run, we've reached EOF */
-		if (bytes_out > 0)
+	while (streams[0].open || streams[1].open)
+	{
+		struct pollfd pfds[2];
+		ProgramStream *polled[2];
+		int count = 0;
+
+		for (int i = 0; i < 2; i++)
 		{
-			FD_SET(outpipe[0], &readFileDescriptorSet);
-		}
-
-		if (bytes_err > 0)
-		{
-			FD_SET(errpipe[0], &readFileDescriptorSet);
-		}
-
-		countFdsReadyToRead =
-			select(nfds, &readFileDescriptorSet, NULL, NULL, NULL);
-
-		if (countFdsReadyToRead == -1)
-		{
-			switch (errno)
+			if (streams[i].open)
 			{
-				case EAGAIN:
-				case EINTR:
-				{
-					/* just loop again */
-					break;
-				}
-
-				case EBADF:
-				case EINVAL:
-				case ENOMEM:
-				default:
-				{
-					/* that's unexpected, act as if doneReading */
-					log_error("Failed to read from command \"%s\": %s",
-							  prog->program, strerror(errno));
-					doneReading = true;
-					break;
-				}
+				pfds[count] = (struct pollfd) { .fd = streams[i].fd, .events = POLLIN };
+				polled[count++] = &(streams[i]);
 			}
 		}
-		else if (countFdsReadyToRead == 0)
+
+		if (poll(pfds, count, -1) < 0)
 		{
-			continue;
+			if (errno == EINTR || errno == EAGAIN)
+			{
+				continue;
+			}
+
+			log_error("Failed to read from command \"%s\": %s",
+					  prog->program, strerror(errno));
+			break;
 		}
-		else
+
+		for (int i = 0; i < count; i++)
 		{
-			if (FD_ISSET(outpipe[0], &readFileDescriptorSet))
+			if (pfds[i].revents != 0 && !read_into_buf(prog, polled[i]))
 			{
-				bytes_out = read_into_buf(prog, outpipe[0], outbuf, false);
-
-				if (bytes_out == -1 && errno != 0)
-				{
-					prog->returnCode = -1;
-					prog->error = errno;
-				}
+				polled[i]->open = false;
 			}
-
-			if (FD_ISSET(errpipe[0], &readFileDescriptorSet))
-			{
-				bytes_err = read_into_buf(prog, errpipe[0], errbuf, true);
-
-				if (bytes_err == -1 && errno != 0)
-				{
-					prog->returnCode = -1;
-					prog->error = errno;
-				}
-			}
-			doneReading = (bytes_out == 0 && bytes_err == 0);
 		}
 	}
 
-	if (outbuf->len > 0)
+	for (int i = 0; i < 2; i++)
 	{
-		prog->stdOut = strndup(outbuf->data, outbuf->len);
+		(void) process_lines(prog, &(streams[i]), true);
 	}
 
-	if (errbuf->len > 0)
+	if (streams[0].captured->len > 0)
 	{
-		prog->stdErr = strndup(errbuf->data, errbuf->len);
+		prog->stdOut = strndup(streams[0].captured->data, streams[0].captured->len);
 	}
 
-	destroyPQExpBuffer(outbuf);
-	destroyPQExpBuffer(errbuf);
+	if (streams[1].captured->len > 0)
+	{
+		prog->stdErr = strndup(streams[1].captured->data, streams[1].captured->len);
+	}
+
+	for (int i = 0; i < 2; i++)
+	{
+		destroyPQExpBuffer(streams[i].captured);
+		destroyPQExpBuffer(streams[i].partial);
+	}
 
 	/* now, wait until the child process is done. */
 	(void) waitprogram(prog, childPid);
@@ -637,25 +611,81 @@ waitprogram(Program *prog, pid_t childPid)
 /*
  * Read from a file descriptor and directly appends to our buffer string.
  */
-static size_t
-read_into_buf(Program *prog, int filedes, PQExpBuffer buffer, bool error)
+static bool
+read_into_buf(Program *prog, ProgramStream *stream)
 {
-	char temp_buffer[BUFSIZE+1] = { 0 };
-	size_t bytes = read(filedes, temp_buffer, BUFSIZE);
+	char buffer[BUFSIZE];
+	ssize_t bytes;
 
-	if (bytes > 0)
+	do {
+		bytes = read(stream->fd, buffer, sizeof(buffer));
+	} while (bytes < 0 && errno == EINTR);
+
+	if (bytes < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
 	{
-		/* terminate the buffer after the length we read */
-		temp_buffer[bytes] = '\0';
+		return true;
+	}
 
-		appendPQExpBufferStr(buffer, temp_buffer);
+	if (bytes < 0)
+	{
+		prog->error = errno;
+		return false;
+	}
 
-		if (prog->processBuffer)
+	if (bytes == 0)
+	{
+		return false;
+	}
+
+	appendBinaryPQExpBuffer(stream->captured, buffer, bytes);
+
+	if (prog->processBuffer)
+	{
+		appendBinaryPQExpBuffer(stream->partial, buffer, bytes);
+		(void) process_lines(prog, stream, false);
+	}
+
+	return true;
+}
+
+
+static void
+process_lines(Program *prog, ProgramStream *stream, bool atEOF)
+{
+	PQExpBuffer partial = stream->partial;
+
+	if (prog->processBuffer == NULL || PQExpBufferBroken(partial))
+	{
+		return;
+	}
+
+	size_t start = 0;
+
+	for (size_t i = 0; i < partial->len; i++)
+	{
+		if (partial->data[i] == '\n')
 		{
-			(*prog->processBuffer)(temp_buffer, error);
+			partial->data[i] = '\0';
+			(*prog->processBuffer)(prog->program, partial->data + start, stream->error);
+			start = i + 1;
 		}
 	}
-	return bytes;
+
+	size_t remaining = partial->len - start;
+
+	if (remaining > 0 && (atEOF || remaining >= MAX_PARTIAL_LINE))
+	{
+		(*prog->processBuffer)(prog->program, partial->data + start, stream->error);
+		start = partial->len;
+		remaining = 0;
+	}
+
+	if (start > 0)
+	{
+		memmove(partial->data, partial->data + start, remaining);
+		partial->len = remaining;
+		partial->data[remaining] = '\0';
+	}
 }
 
 
